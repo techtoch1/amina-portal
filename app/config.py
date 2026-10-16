@@ -57,7 +57,10 @@ class Settings:
     @classmethod
     def from_env(cls, load_file=True):
         if load_file:
-            load_dotenv(os.environ.get("ENV_FILE") or BASE_DIR / ".env")
+            env_file = os.environ.get("ENV_FILE")
+            if not env_file and os.access("/etc/amina.env", os.R_OK):  # installed on a server
+                env_file = "/etc/amina.env"
+            load_dotenv(env_file or BASE_DIR / ".env")
         e = os.environ.get
         raw_id = _clean(e("WBIZ_CLIENT_ID"))
         s = cls(

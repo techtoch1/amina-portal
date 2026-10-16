@@ -100,7 +100,7 @@ Afterwards:
 
 If the connection test says **invalid api key**, copy the key again from Wbiztool and save it. To see what the
 server has (key length and odd characters only, never the key):
-`cd /opt/amina && sudo -u amina .venv/bin/python -m app.cli check`
+`cd /opt/amina && sudo -u amina ENV_FILE=/etc/amina.env .venv/bin/python -m app.cli check`
 
 Back up `/var/lib/amina/` (medicines, Mom's status log, reminder ids). It is health data: keep it private.
 
