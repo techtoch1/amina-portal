@@ -61,6 +61,9 @@ class DB:
                 c.execute("ALTER TABLE status_log ADD COLUMN event_date TEXT NOT NULL DEFAULT ''")
                 c.execute("ALTER TABLE status_log ADD COLUMN event_time TEXT NOT NULL DEFAULT ''")
                 c.execute("UPDATE status_log SET event_date=substr(ts,1,10) WHERE event_date=''")
+            rem_cols = {r["name"] for r in c.execute("PRAGMA table_info(reminders)")}
+            if "once" not in rem_cols:  # a one-off date sent as a date-specific recurring reminder
+                c.execute("ALTER TABLE reminders ADD COLUMN once INTEGER NOT NULL DEFAULT 0")
             if "remind" not in have:  # reminders are now opt-in per medicine; keep the ones that already had times
                 c.execute("ALTER TABLE medicines ADD COLUMN remind INTEGER NOT NULL DEFAULT 0")
                 c.execute("UPDATE medicines SET remind=1 WHERE times != '' AND active=1")
@@ -107,13 +110,15 @@ class DB:
         with self.conn() as c:
             return [dict(r) for r in c.execute("SELECT * FROM reminders WHERE status='active' ORDER BY id")]
 
-    def add_reminder(self, d, remote_id):
+    def add_reminder(self, d, remote_id, kind=None, cron=None, once=False):
+        """Store what was created on Wbiztool. kind/cron override the plan's when a one-off date was
+        sent as a date-specific recurring reminder (kind='cron', once=True)."""
         with self.conn() as c:
             c.execute(
-                "INSERT INTO reminders(fingerprint,group_key,kind,recipient,cron,fire_at,message,names,remote_id,status,created_at)"
-                " VALUES(?,?,?,?,?,?,?,?,?,'active',?)",
-                (d.fingerprint, d.group_key, d.kind, d.recipient, d.cron, d.fire_at, d.message,
-                 ", ".join(d.names), remote_id, now_iso()),
+                "INSERT INTO reminders(fingerprint,group_key,kind,recipient,cron,fire_at,message,names,remote_id,status,created_at,once)"
+                " VALUES(?,?,?,?,?,?,?,?,?,'active',?,?)",
+                (d.fingerprint, d.group_key, kind or d.kind, d.recipient, d.cron if cron is None else cron, d.fire_at,
+                 d.message, ", ".join(d.names), remote_id, now_iso(), int(once)),
             )
 
     def end_reminder(self, row_id, status):

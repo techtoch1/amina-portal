@@ -257,3 +257,50 @@ def test_schedule_date_format_is_discovered_and_remembered(settings):
     assert WbizClient(settings)._format_schedule("2026-10-29 08:00", "epoch_ms", "Asia/Beirut").endswith("000")
     assert WbizClient(settings)._format_schedule("2026-10-29 08:00", "epoch", "Asia/Beirut") == str(
         int(_dt(2026, 10, 29, 6, 0, tzinfo=__import__("datetime").timezone.utc).timestamp()))  # Beirut is UTC+2 after DST ends (25 Oct)
+
+
+def test_one_off_date_falls_back_to_a_date_specific_reminder(settings, tmp_path, monkeypatch):
+    from datetime import date
+    import app.sync as sync
+    from app.excel import Medicine
+    from app.sync import apply_plan, compute_plan, rollover
+
+    class Rejecting(WbizClient):
+        def __init__(self, s):
+            super().__init__(s)
+            self.log = []
+
+        def _post(self, path, fields=None):
+            self.log.append((path, dict(fields or {})))
+            if path == "/schedule_msg/":
+                raise WbizError("/schedule_msg/ failed (status=0): Scheduled date & time is not in valid format")
+            return {"status": 1, "reminder_id": f"r{len(self.log)}"}
+
+    db = DB(tmp_path / "t.db")
+    shot = Medicine(row=1, name="Shot", dose="30 mg", instruction="إبرة", purpose="", kind="every_n", times=["08:00"],
+                    every_n=28, anchor=date(2026, 10, 29), remind=True)
+    c = Rejecting(settings)
+    monkeypatch.setattr(sync, "local_now", lambda s: NOW)
+    plan = compute_plan(settings, db, [shot], NOW)
+    assert [d.kind for d in plan["create"]] == ["oneoff", "oneoff"]  # Mom + the copy to me
+    res = apply_plan(c, settings, db, [shot], plan["hash"])
+    assert all(r["ok"] for r in res)
+    rows = db.active()
+    assert [(r["kind"], r["once"], r["cron"], r["fire_at"]) for r in rows] == [("cron", 1, "0 8 29 10 *", "2026-10-29 08:00")] * 2
+    assert db.get_setting("wbiz.schedule_mode") == "cron"
+    tried = [p for p, _ in c.log if p == "/schedule_msg/"]
+    assert len(tried) == 13  # the date formats are tried once; the second message goes straight to the fallback
+    created = [f for p, f in c.log if p == "/reminder/create/"]
+    assert created[0]["cron"] == "0 8 29 10 *" and created[0]["name"].startswith("Meds 10-29 08:00")
+    assert not compute_plan(settings, db, [shot], NOW)["create"]  # in sync: the stored reminder matches the plan
+
+    # the date passes: the finished reminder is cancelled (it would repeat next year) and the next date is scheduled
+    later = datetime(2026, 10, 29, 9, 0)
+    monkeypatch.setattr(sync, "local_now", lambda s: later)
+    made = rollover(c, settings, db, [shot])
+    assert len(made) == 2 and all("2026-11-26" in m for m in made)
+    cancelled = [f for p, f in c.log if p == "/reminder/cancel/"]
+    assert len(cancelled) == 2
+    assert [(r["cron"], r["fire_at"]) for r in db.active()] == [("0 8 26 11 *", "2026-11-26 08:00")] * 2
+    # nothing left to cancel, and a failing cancel is retried instead of lost
+    assert rollover(c, settings, db, [shot]) == []

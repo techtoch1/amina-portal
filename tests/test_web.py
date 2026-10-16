@@ -481,3 +481,32 @@ def test_status_log_migration_keeps_old_entries(tmp_path):
     assert row["event_date"] == "2026-10-01" and row["event_time"] == "" and row["value"] == "125/80"
     db.add_status("Doctor visit", "Dr X", "", "2026-12-01", "10:00")
     assert db.list_status()[0]["event_date"] == "2026-12-01"
+
+
+def test_report_shows_fallback_one_off_as_a_single_date(settings, tmp_path):
+    from datetime import date, timedelta
+    from app.wbiztool import WbizError
+
+    class Rejecting(FakeClient):
+        def _post(self, path, fields=None):
+            if path == "/schedule_msg/":
+                raise WbizError("/schedule_msg/ failed (status=0): Scheduled date & time is not in valid format")
+            return {"status": 1, "reminder_id": "r1"}
+
+    c = TestClient(create_app(settings, Rejecting(settings)), base_url="http://testserver")
+    h = login(c, settings)
+    imported(c, h, tmp_path)
+    gamma = med_id(c, "Gamma")  # "Every 28 days"
+    when = date.today() + timedelta(days=10)
+    r = c.post(f"/api/medicines/{gamma}/reminder", json={"on": True, "times": ["10:00"], "every_n": 28,
+                                                       "date": when.isoformat()}, headers=h)
+    assert r.status_code == 200
+    plan = c.post("/api/sync/preview", headers=h).json()
+    assert all(x["kind"] == "oneoff" for x in plan["create"])
+    res = c.post("/api/sync/apply", json={"hash": plan["hash"]}, headers=h).json()["results"]
+    assert all(x["ok"] for x in res)
+    page = c.get("/reminders").text
+    assert "Once on " + when.strftime("%d %b %Y") in page and "Every day" not in page.split("Scheduled")[1].split("Activity")[0]
+    assert "one-off dates now use date-specific reminders" in page  # the switch is logged in the activity list
+    assert "Once on" in c.get("/reminders/export.csv").text
+    assert not c.post("/api/sync/preview", headers=h).json()["create"]

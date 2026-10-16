@@ -82,14 +82,51 @@ def reminder_name(d):
     return text if len(text) <= 80 else text[:77] + "..."
 
 
+def once_cron(fire_at):
+    """'2026-10-29 08:00' -> '0 8 29 10 *': fires on that day and time, then again a year later unless cancelled."""
+    when = datetime.strptime(fire_at, "%Y-%m-%d %H:%M")
+    return f"{when.minute} {when.hour} {when.day} {when.month} *"
+
+
 def _create(client, settings, db, d):
     name = reminder_name(d)
     if d.kind == "cron":
         rid = client.create_reminder(d.phone, d.message, d.cron, settings.timezone, name)
-    else:
-        rid = client.schedule_message(d.phone, d.message, d.fire_at, settings.timezone, name)
-    db.add_reminder(d, rid)
+        db.add_reminder(d, rid)
+        return rid
+    # A single date. Prefer Wbiztool's scheduled message; if it rejects the date, use a date-specific
+    # recurring reminder instead (that endpoint is known to work) and remember to do so from now on.
+    if db.get_setting("wbiz.schedule_mode", "auto") != "cron":
+        try:
+            rid = client.schedule_message(d.phone, d.message, d.fire_at, settings.timezone, name)
+            db.add_reminder(d, rid)
+            return rid
+        except WbizError as exc:
+            if "format" not in str(exc).lower():
+                raise
+            db.set_setting("wbiz.schedule_mode", "cron")
+            db.log_event("create", True, "Scheduled messages rejected the date; one-off dates now use date-specific reminders")
+    cron = once_cron(d.fire_at)
+    rid = client.create_reminder(d.phone, d.message, cron, settings.timezone, name)
+    db.add_reminder(d, rid, kind="cron", cron=cron, once=True)
     return rid
+
+
+def retire_fired_once_reminders(client, db, now):
+    """A date-specific reminder repeats every year, so cancel it once its date has passed."""
+    stamp = now.strftime("%Y-%m-%d %H:%M")
+    retired = []
+    for r in db.active():
+        if r["once"] and r["fire_at"] and r["fire_at"] < stamp:
+            try:
+                if r["remote_id"]:
+                    client.cancel_reminder(r["remote_id"])
+                db.end_reminder(r["id"], "done")
+                db.log_event("cancel", True, f"cancelled finished one-off reminder {r['fire_at']}")
+                retired.append(r["fire_at"])
+            except WbizError as exc:  # try again on the next pass
+                db.log_event("cancel", False, f"finished one-off {r['fire_at']}: {exc}")
+    return retired
 
 
 def apply_plan(client, settings, db, medicines, approved_hash):
@@ -133,6 +170,7 @@ def rollover(client, settings, db, medicines):
     if not (settings.wbiz_configured and settings.docs_verified):
         return []
     with _lock:
+        retire_fired_once_reminders(client, db, local_now(settings))
         plan = compute_plan(settings, db, medicines)
         out = []
         for d in plan["create"]:

@@ -314,7 +314,7 @@ def create_app(settings=None, client=None):
         now = local_now(settings)
         rows = []
         for r in db.active():
-            if r["kind"] == "cron":
+            if r["kind"] == "cron" and not r["once"]:
                 when, nxt = cron_human(r["cron"]), next_cron_fire(r["cron"], now)
             else:
                 nxt = datetime.strptime(r["fire_at"], "%Y-%m-%d %H:%M")
