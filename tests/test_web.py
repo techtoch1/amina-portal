@@ -351,3 +351,42 @@ def test_arabic_units_and_glossary():
     assert translate_purpose("Appetite / weight") == "الشهية / الوزن" and translate_purpose("Unknown thing") == ""
     assert translate_notes("Same medicine as Primperan: use one, not both") == "نفس الدواء مثل Primperan: استخدم واحداً فقط وليس كليهما"
     assert translate_notes("Started 20 Dec 2024") == "بدأ بتاريخ 20 كانون الأول 2024" and translate_notes("Take with orange juice") == ""
+
+
+def test_send_test_reminder_goes_only_to_my_number(settings, tmp_path, monkeypatch):
+    from app.wbiztool import WbizError
+
+    class Spy(FakeClient):
+        sent = []
+
+        def _post(self, path, fields=None):
+            if path.endswith("/send_msg/"):
+                Spy.sent.append(dict(fields))
+            return {"status": 1, "reminder_id": "r1"}
+
+    c = TestClient(create_app(settings, Spy(settings)), base_url="http://testserver")
+    h = login(c, settings)
+    imported(c, h, tmp_path)
+    delta = med_id(c, "Delta")
+    c.post(f"/api/medicines/{delta}/reminder", json={"on": True, "frequency": "daily", "times": ["08:00"]}, headers=h)
+    plan = c.post("/api/sync/preview", headers=h).json()
+    assert all(x["fingerprint"] for x in plan["create"])
+    fp = plan["create"][0]["fingerprint"]
+    # a pending (not yet applied) message can be tested
+    assert c.post("/api/test-reminder", json={"fingerprint": fp}, headers=h).json() == {"ok": True}
+    sent = Spy.sent[-1]
+    assert sent["phone"] == settings.my_number and settings.mom_number not in sent.values()
+    assert sent["message_template"].startswith("🧪") and "Delta" in sent["message_template"] and "Test message" in sent["message_template"]
+    assert c.post("/api/test-reminder", json={"fingerprint": fp}, headers=h).status_code == 429  # throttled
+    # applied reminders can be tested from the report; the report shows the button
+    c.post("/api/sync/apply", json={"hash": plan["hash"]}, headers=h)
+    page = c.get("/reminders").text
+    assert page.count('data-test="') == 2
+    import app.main as main_mod
+    monkeypatch.setattr(main_mod, "TEST_MIN_INTERVAL", 0.0)
+    active_fp = page.split('data-test="')[1].split('"')[0]
+    assert c.post("/api/test-reminder", json={"fingerprint": active_fp}, headers=h).json() == {"ok": True}
+    assert c.post("/api/test-reminder", json={"fingerprint": "nope"}, headers=h).status_code == 404
+    assert c.post("/api/test-reminder", json={"fingerprint": fp}).status_code == 403  # CSRF
+    settings.my_number = ""
+    assert c.post("/api/test-reminder", json={"fingerprint": active_fp}, headers=h).status_code == 400

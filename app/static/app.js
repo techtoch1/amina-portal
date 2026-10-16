@@ -185,6 +185,16 @@
   if (page === 'reminders') {
     const rv = $('review-dialog');
     let planHash = null;
+    const sendTest = async (btn) => {
+      const label = btn.textContent;
+      btn.disabled = true; btn.textContent = 'Sending…';
+      const {ok, data} = await call('POST', '/api/test-reminder', {fingerprint: btn.dataset.test});
+      btn.disabled = false;
+      btn.textContent = ok ? 'Sent ✔ — check your phone' : label;
+      if (!ok) { toast('Test failed: ' + data.error, 9000); if ($('plan-error') && rv.open) $('plan-error').textContent = data.error; }
+      else toast('Test message sent to your number.');
+    };
+    document.querySelectorAll('.report [data-test]').forEach((b) => b.onclick = () => sendTest(b));
     const render = (list, items, verb) => {
       list.replaceChildren();
       items.forEach((it) => {
@@ -192,6 +202,10 @@
         li.append(el('div', verb + ' · ' + (it.recipient === 'me' ? 'copy to me' : 'Mom') + ' · ' +
           (it.kind === 'cron' ? 'repeats ' : 'once at ') + it.when, 'meta'));
         li.append(el('pre', it.message));
+        if (it.fingerprint && verb === 'Create') {
+          const b = el('button', 'Send test to me', 'btn small test-btn'); b.type = 'button'; b.dataset.test = it.fingerprint;
+          b.onclick = () => sendTest(b); li.append(b);
+        }
         list.append(li);
       });
     };

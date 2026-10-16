@@ -55,7 +55,8 @@ def compute_plan(settings, db, medicines, now=None):
 
 def plan_to_json(plan):
     def c(d):
-        return {"kind": d.kind, "when": d.when, "recipient": d.recipient, "names": d.names, "message": d.message}
+        return {"kind": d.kind, "when": d.when, "recipient": d.recipient, "names": d.names, "message": d.message,
+                "fingerprint": d.fingerprint}
 
     def x(r):
         return {"kind": r["kind"], "when": r["cron"] or r["fire_at"], "recipient": r["recipient"],

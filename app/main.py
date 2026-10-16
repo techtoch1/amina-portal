@@ -33,6 +33,8 @@ PROFILE_FIELDS = {"name": 120, "age": 40, "conditions": 1000, "allergies": 1000,
                   "emergency_contact": 200, "pharmacy": 200, "notes": 2000}
 STATUS_KINDS = ["Blood pressure", "Blood sugar", "Weight", "Temperature", "Mood / condition", "Doctor visit", "Note"]
 MAX_UPLOAD = 2 * 1024 * 1024
+TEST_MIN_INTERVAL = 3.0  # seconds between manual test sends
+TEST_HEADER = "🧪 رسالة تجريبية — Test message (not a real reminder)\n\n"
 FAMILY_KEY = "family.hash"
 
 LABELS = {
@@ -292,7 +294,7 @@ def create_app(settings=None, client=None):
                 nxt = datetime.strptime(r["fire_at"], "%Y-%m-%d %H:%M")
                 when = "Once on " + nxt.strftime("%d %b %Y at %H:%M")
             rows.append({"names": r["names"], "when": when, "next": nxt, "recipient": r["recipient"],
-                         "message": r["message"], "kind": r["kind"]})
+                         "message": r["message"], "kind": r["kind"], "fingerprint": r["fingerprint"]})
         return sorted(rows, key=lambda x: (x["next"] is None, x["next"] or now, x["recipient"]))
 
     @app.get("/reminders", response_class=HTMLResponse, dependencies=[Depends(auth)])
@@ -483,6 +485,31 @@ def create_app(settings=None, client=None):
             return JSONResponse({"error": str(exc)}, status_code=502)
         db.log_event("test", True, "test message sent to my number")
         cache["status"] = (0, None)
+        return {"ok": True}
+
+    test_gate = {"last": 0.0}
+
+    @app.post("/api/test-reminder", dependencies=[Depends(auth), Depends(csrf)])
+    async def test_reminder(request: Request):
+        """Send one of the app's own reminder messages to MY number only (never Mom) as a test."""
+        fingerprint = str((await request.json()).get("fingerprint") or "")
+        if not settings.my_number:
+            return JSONResponse({"error": "Your number is not set (Settings)"}, status_code=400)
+        if _time.time() - test_gate["last"] < TEST_MIN_INTERVAL:
+            return JSONResponse({"error": "Wait a few seconds between tests"}, status_code=429)
+        message = next((r["message"] for r in db.active() if r["fingerprint"] == fingerprint), None)
+        if message is None:  # not applied yet: look it up in the pending plan
+            plan = compute_plan(settings, db, planning_meds())
+            message = next((d.message for d in plan["create"] if d.fingerprint == fingerprint), None)
+        if message is None:
+            return JSONResponse({"error": "That reminder no longer exists — reload the page"}, status_code=404)
+        test_gate["last"] = _time.time()
+        try:
+            client.send_message(settings.my_number, TEST_HEADER + message)
+        except WbizError as exc:
+            db.log_event("test", False, "Test reminder: " + str(exc))
+            return JSONResponse({"error": str(exc)}, status_code=502)
+        db.log_event("test", True, "Test reminder sent to my number")
         return {"ok": True}
 
     @app.put("/api/config", dependencies=[Depends(auth), Depends(csrf)])

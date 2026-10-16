@@ -38,7 +38,8 @@
         <td data-label="Medicines" dir="auto">{{ r.names }}
           <details><summary>Message</summary><pre class="msg" dir="auto">{{ r.message }}</pre></details></td>
         <td data-label="Schedule">{{ r.when }}</td>
-        <td data-label="To"><span class="chip {{ 'soft' if r.recipient == 'me' }}">{{ 'Mom' if r.recipient == 'mom' else 'Copy to me' }}</span></td>
+        <td data-label="To"><span class="chip {{ 'soft' if r.recipient == 'me' }}">{{ 'Mom' if r.recipient == 'mom' else 'Copy to me' }}</span>
+          <button class="btn small noprint test-btn" data-test="{{ r.fingerprint }}">Send test to me</button></td>
       </tr>
       {% endfor %}
     </tbody>
@@ -67,7 +68,7 @@
 
 <dialog id="review-dialog" data-auto="{{ 1 if auto_review else 0 }}">
   <h2>Review changes</h2>
-  <p class="muted">Wbiztool reminders can't be edited, so a change cancels the old one and creates a new one. Nothing is sent until you approve.</p>
+  <p class="muted">Wbiztool reminders can't be edited, so a change cancels the old one and creates a new one. Nothing is sent to Mom until you approve. Use <strong>Send test to me</strong> to see any message on your own phone first.</p>
   <label class="check"><input type="checkbox" id="copy" {{ 'checked' if copy }}> Also send a copy of each reminder to my number</label>
   <p id="plan-error" class="err" role="alert"></p>
   <div id="plan" hidden>
