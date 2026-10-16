@@ -54,7 +54,7 @@
 
 <section class="card">
   <h2>Family access</h2>
-  <p class="muted">Give family a separate password for a <strong>read-only</strong> page: today's medicines, the full table in English and Arabic, her allergies and contacts. They can't change anything or see the settings.</p>
+  <p class="muted">Give family a separate password for a <strong>read-only</strong> page: today's medicines, the full table in English and Arabic, her allergies and contacts, and Mom's log (upcoming appointments, readings and history). They can't change anything or see the settings.</p>
   <p>Status: <strong id="family-state">{{ 'On' if family_enabled else 'Off' }}</strong>{% if family_enabled %} — share <code>/family</code> and the family password{% endif %}</p>
   <form id="family-form" class="stack" autocomplete="off">
     <label>{{ 'New family password' if family_enabled else 'Family password' }} (8+ characters)

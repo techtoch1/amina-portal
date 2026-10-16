@@ -52,7 +52,7 @@ def med_id(c, name):
 
 def test_auth_required(settings):
     c = make(settings)
-    for path in ("/", "/medicines", "/reminders", "/mom", "/settings", "/family", "/reminders/export.csv"):
+    for path in ("/", "/medicines", "/reminders", "/mom", "/settings", "/family", "/family/log", "/reminders/export.csv"):
         assert c.get(path, follow_redirects=False).status_code == 303, path
     assert c.get("/api/status").status_code == 401
     assert c.post("/login", data={"password": "nope"}).status_code == 401
@@ -510,3 +510,40 @@ def test_report_shows_fallback_one_off_as_a_single_date(settings, tmp_path):
     assert "one-off dates now use date-specific reminders" in page  # the switch is logged in the activity list
     assert "Once on" in c.get("/reminders/export.csv").text
     assert not c.post("/api/sync/preview", headers=h).json()["create"]
+
+
+def test_family_can_read_mom_log_but_not_change_it(settings):
+    from datetime import date, timedelta
+    c = make(settings)
+    h = login(c, settings)
+    today, past, future = date.today(), (date.today() - timedelta(days=30)).isoformat(), (date.today() + timedelta(days=14)).isoformat()
+    post = lambda **kw: c.post("/api/status-log", json=kw, headers=h)  # noqa: E731
+    post(kind="Doctor visit", value="Dr. Kamar", note="Results fine", date=past, time="14:30")
+    post(kind="Appointment", value="Oncology", date=future, time="09:15")
+    post(kind="Blood pressure", value="130/80", note="Evening")
+    c.put("/api/profile", json={"name": "Amina"}, headers=h)
+    c.put("/api/family-access", json={"password": "family-pass-123"}, headers=h)
+    f = TestClient(c.app, base_url="http://testserver")
+    fh = login(f, settings, "family-pass-123")
+    page = f.get("/family/log").text
+    for needle in ("Upcoming", "Oncology", "09:15", "Latest readings", "130/80", "History", "Dr. Kamar", "Results fine", "14:30"):
+        assert needle in page, needle
+    # read-only: no way to add, delete or clear, no owner pages in the menu
+    for forbidden in ("status-form", "data-del-status", "clear-log", "profile-form", 'href="/mom"', 'href="/settings"', 'href="/reminders"'):
+        assert forbidden not in page, forbidden
+    assert 'href="/family"' in page and 'href="/family/log"' in page  # the family menu
+    # Arabic version
+    ar = f.get("/family/log?lang=ar").text
+    assert 'dir="rtl"' in ar and "زيارة الطبيب" in ar and "ضغط الدم" in ar and "المواعيد القادمة" in ar and "السجل" in ar
+    assert (date.today() - timedelta(days=30)).strftime("%d/%m/%Y") in ar  # Arabic pages use dd/mm/yyyy
+    # the medicines family page links to it too
+    assert 'href="/family/log"' in f.get("/family").text
+    # and it still can't change anything or reach the owner page
+    assert f.post("/api/status-log", json={"kind": "Note", "note": "x"}, headers=fh).status_code == 403
+    assert f.delete("/api/status-log", headers=fh).status_code == 403
+    r = f.get("/mom", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/family"
+    # the owner sees the same page, and family access off means no sign-in
+    assert c.get("/family/log").status_code == 200
+    c.delete("/api/family-access", headers=h)
+    assert TestClient(c.app, base_url="http://testserver").post("/login", data={"password": "family-pass-123"}).status_code == 401

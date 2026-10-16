@@ -36,6 +36,10 @@ PROFILE_FIELDS = {"name": 120, "age": 40, "conditions": 1000, "allergies": 1000,
                   "emergency_contact": 200, "pharmacy": 200, "notes": 2000}
 STATUS_KINDS = ["Doctor visit", "Appointment", "Lab test", "Blood pressure", "Blood sugar", "Weight", "Temperature",
                 "Mood / condition", "Note"]
+LOG_KIND_AR = {"Doctor visit": "زيارة الطبيب", "Appointment": "موعد", "Lab test": "فحص مخبري", "Blood pressure": "ضغط الدم",
+               "Blood sugar": "سكر الدم", "Weight": "الوزن", "Temperature": "الحرارة", "Mood / condition": "الحالة العامة",
+               "Note": "ملاحظة"}
+READING_KINDS_EXCLUDED = ("Doctor visit", "Appointment", "Lab test", "Note")
 MAX_UPLOAD = 2 * 1024 * 1024
 TEST_MIN_INTERVAL = 3.0  # seconds between manual test sends
 TEST_HEADER = "🧪 رسالة تجريبية — Test message (not a real reminder)\n\n"
@@ -162,15 +166,16 @@ def create_app(settings=None, client=None):
     templates.env.filters["local"] = local_str
     templates.env.filters["ar_dose"] = arabic_dose
 
-    def event_str(row):
-        """'Fri 16 Oct 2026, 14:30' for an entry's own date (and time, if it has one)."""
+    def event_str(row, lang="en"):
+        """'Fri 16 Oct 2026, 14:30' (Arabic: '16/10/2026، 14:30') for an entry's own date and optional time."""
         try:
-            text = datetime.strptime(row["event_date"], "%Y-%m-%d").strftime("%a %d %b %Y")
+            text = datetime.strptime(row["event_date"], "%Y-%m-%d").strftime("%d/%m/%Y" if lang == "ar" else "%a %d %b %Y")
         except (ValueError, KeyError):
             return local_str(row.get("ts", ""))
-        return f"{text}, {row['event_time']}" if row.get("event_time") else text
+        return f"{text}{'،' if lang == 'ar' else ','} {row['event_time']}" if row.get("event_time") else text
 
     templates.env.filters["event"] = event_str
+    templates.env.filters["kind_ar"] = lambda k: LOG_KIND_AR.get(k, k)
 
     # ---- login ----
     @app.get("/login", response_class=HTMLResponse)
@@ -287,16 +292,30 @@ def create_app(settings=None, client=None):
             "updated": now.strftime("%d %b %Y"), "today_label": now.strftime("%A %d %B"),
             "total": sum(len(v) for v in groups.values()), "active": "family"})
 
-    @app.get("/mom", response_class=HTMLResponse, dependencies=[Depends(auth)])
-    def mom_page(request: Request):
+    def log_view():
         today = local_now(settings).date().isoformat()
         log = db.list_status(120)
         past = [r for r in log if r["event_date"] <= today]
         upcoming = sorted((r for r in log if r["event_date"] > today), key=lambda r: (r["event_date"], r["event_time"]))
         latest = {}
         for row in past:
-            if row["kind"] not in ("Doctor visit", "Appointment", "Lab test", "Note"):  # readings only
+            if row["kind"] not in READING_KINDS_EXCLUDED:  # readings only
                 latest.setdefault(row["kind"], row)
+        return today, past, upcoming, latest
+
+    @app.get("/family/log", response_class=HTMLResponse, dependencies=[Depends(auth_any)])
+    def family_log_page(request: Request, lang: str = "en"):
+        """Read-only copy of Mom's log for family: upcoming appointments, latest readings, history."""
+        lang = lang if lang in LABELS else "en"
+        _today, past, upcoming, latest = log_view()
+        return templates.TemplateResponse(request, "family_log.html", {
+            "csrf": request.session.get("csrf", ""), "role": request.session.get("role", "owner"), "lang": lang,
+            "L": LABELS[lang], "profile": db.profile(), "log": past, "upcoming": upcoming, "latest": latest,
+            "active": "family_log"})
+
+    @app.get("/mom", response_class=HTMLResponse, dependencies=[Depends(auth)])
+    def mom_page(request: Request):
+        today, past, upcoming, latest = log_view()
         return templates.TemplateResponse(request, "mom.html", base_ctx(
             request, "mom", kinds=STATUS_KINDS, log=past, upcoming=upcoming, latest=latest, today=today))
 

@@ -27,6 +27,11 @@
     <a href="/mom" {% if active == 'mom' %}aria-current="page"{% endif %}>{{ icon('heart') }}<span>Mom</span></a>
     <a href="/settings" {% if active == 'settings' %}aria-current="page"{% endif %}>{{ icon('sliders') }}<span>Settings</span>{% if not configured %}<b class="dot" aria-label="Setup needed"></b>{% endif %}</a>
   </nav>
+  {% else %}
+  <nav class="nav" aria-label="Main">
+    <a href="/family" {% if active == 'family' %}aria-current="page"{% endif %}>{{ icon('pill') }}<span>{{ 'الأدوية' if lang == 'ar' else 'Medicines' }}</span></a>
+    <a href="/family/log" {% if active == 'family_log' %}aria-current="page"{% endif %}>{{ icon('heart') }}<span>{{ 'السجل الصحي' if lang == 'ar' else "Mom's log" }}</span></a>
+  </nav>
   {% endif %}
   <button class="btn ghost small" id="logout">Sign out</button>
 </header>

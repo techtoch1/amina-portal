@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}{{ 'السجل الصحي' if lang == 'ar' else "Mom's log" }}{% endblock %}
+{% block body %}
+<div class="pagehead noprint">
+  <div><h1 dir="auto">{{ profile.get('name') or ('السجل الصحي' if lang == 'ar' else "Mom's log") }}</h1>
+    <p class="muted">{{ 'للقراءة فقط' if lang == 'ar' else 'Read only' }}</p></div>
+  <div class="toolbar">
+    <div class="seg" role="group" aria-label="Language">
+      <a class="{{ 'active' if lang == 'en' }}" href="/family/log?lang=en">English</a>
+      <a class="{{ 'active' if lang == 'ar' }}" href="/family/log?lang=ar">عربي</a>
+    </div>
+    <button class="btn" id="print-btn">Print</button>
+  </div>
+</div>
+
+<div class="family" dir="{{ L.dir }}" lang="{{ lang }}">
+  {% if upcoming %}
+  <section class="card big">
+    <h2>{{ 'المواعيد القادمة' if lang == 'ar' else 'Upcoming' }}</h2>
+    <ul class="timeline">
+      {% for row in upcoming %}
+      <li><span class="mark soft" aria-hidden="true">📅</span>
+        <div><strong>{{ row.kind|kind_ar if lang == 'ar' else row.kind }}</strong> — <span dir="auto">{{ row.value }}{% if row.value and row.note %} · {% endif %}{{ row.note }}</span>
+          <div class="muted">{{ row|event(lang) }}</div></div></li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if latest %}
+  <section class="stats" aria-label="{{ 'آخر القراءات' if lang == 'ar' else 'Latest readings' }}">
+    {% for kind, row in latest.items() %}
+    <div class="stat"><span class="lbl">{{ kind|kind_ar if lang == 'ar' else kind }}</span><span class="num sm" dir="auto">{{ row.value or '—' }}</span>
+      <span class="sub" dir="auto">{% if row.note %}{{ row.note }} · {% endif %}{{ row|event(lang) }}</span></div>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  <section class="card big">
+    <h2>{{ 'السجل' if lang == 'ar' else 'History' }}</h2>
+    {% if log %}
+    <ul class="timeline">
+      {% for row in log %}
+      <li><span class="mark soft" aria-hidden="true">•</span>
+        <div><strong>{{ row.kind|kind_ar if lang == 'ar' else row.kind }}</strong> · <span dir="auto">{{ row.value }}{% if row.note %} — {{ row.note }}{% endif %}</span>
+          <div class="muted">{{ row|event(lang) }}</div></div></li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted">{{ 'لا توجد سجلات بعد.' if lang == 'ar' else 'Nothing logged yet.' }}</p>{% endif %}
+  </section>
+</div>
+{% endblock %}
