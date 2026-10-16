@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -51,6 +52,10 @@ class DB:
         self.path = str(path)
         with self.conn() as c:
             c.executescript(SCHEMA)
+        try:  # holds the API key and health data: owner-only
+            os.chmod(self.path, 0o600)
+        except OSError:
+            pass
 
     @contextmanager
     def conn(self):

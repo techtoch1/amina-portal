@@ -28,8 +28,8 @@ pip install -r requirements.txt
 cp .env.example .env && chmod 600 .env     # then edit .env
 ```
 
-Fill in `.env`: Wbiztool `client_id`, `api_key`, `whatsapp_client`, mom's and your number
-(digits with country code), and `DASHBOARD_PASSWORD` (10+ characters).
+Fill in `.env`: `DASHBOARD_PASSWORD` (10+ characters). The Wbiztool details and phone numbers can be entered
+in the app's Settings tab (values saved there override `.env`).
 For plain-http local testing set `COOKIE_SECURE=false`.
 
 ### 1. Test the credentials first
@@ -80,8 +80,7 @@ git clone <this repo> ~/amina-portal
 sudo bash ~/amina-portal/deploy/install.sh
 ```
 
-The installer asks for the Wbiztool credentials, both phone numbers and the dashboard
-password (secrets are not echoed), then sets up:
+The installer asks for the dashboard password (not echoed), then sets up:
 
 - `/opt/amina` (code + virtualenv), run by a locked-down `amina` systemd service on `127.0.0.1:8010`
 - `/etc/amina.env` (credentials, readable by root and the service only)
@@ -92,15 +91,16 @@ It refuses to run if the domain or port is already used, never edits other Nginx
 safe to re-run. Change defaults with `DOMAIN=... PORT=8011 sudo -E bash deploy/install.sh`.
 
 Afterwards:
-1. Sign in at https://amina.aligned-tech.com, add the medicines, fill in Mom's profile.
-2. Verify the Wbiztool paths (see the top of this file), then set `WBIZ_DOCS_VERIFIED=true`
-   in `/etc/amina.env` and `sudo systemctl restart amina`.
-3. Update later with `bash ~/amina-portal/deploy/update.sh`. Logs: `journalctl -u amina -f`.
+1. Sign in at https://amina.aligned-tech.com and open **Settings**: enter the Wbiztool client ID, API key,
+   WhatsApp client and both phone numbers, then **Save & test connection**. The API key is stored in the
+   database on the server (owner-only file permissions) and is never displayed again.
+2. Add the medicines and fill in Mom's profile.
+3. Verify the Wbiztool paths (see the top of this file), then tick the confirmation box in Settings.
+4. Update later with `bash ~/amina-portal/deploy/update.sh`. Logs: `journalctl -u amina -f`.
 
-If the Reminders tab says **invalid api key**: `sudo bash ~/amina-portal/deploy/set-secret.sh` re-enters the
-key (hidden) and tests it. `... set-secret.sh WBIZ_CLIENT_ID` does the same for another setting. To see what the
-server actually has (key length and odd characters only, never the key):
-`cd /opt/amina && sudo -u amina ENV_FILE=/etc/amina.env .venv/bin/python -m app.cli check`
+If the connection test says **invalid api key**, copy the key again from Wbiztool and save it. To see what the
+server has (key length and odd characters only, never the key):
+`cd /opt/amina && sudo -u amina .venv/bin/python -m app.cli check`
 
 Back up `/var/lib/amina/` (medicines, Mom's status log, reminder ids). It is health data: keep it private.
 

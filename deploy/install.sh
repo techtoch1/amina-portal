@@ -57,13 +57,8 @@ fi
   || fail "Python packages are still missing after install"
 chown -R root:root "$APP"; chown -R amina:amina "$DATA"; chmod 700 "$DATA"
 
-say "Settings (stored in $ENVF, readable by root and the service only)"
+say "Dashboard password (stored in $ENVF, readable by root and the service only)"
 [[ -f "$ENVF" ]] || { install -m 640 -o root -g amina /dev/null "$ENVF"; }
-ask WBIZ_CLIENT_ID "Wbiztool client_id (number)"
-ask WBIZ_API_KEY "Wbiztool api_key" secret
-ask WBIZ_WHATSAPP_CLIENT "Wbiztool whatsapp_client"
-ask MOM_NUMBER "Mom's WhatsApp number (digits with country code)"
-ask MY_NUMBER "Your WhatsApp number (digits with country code)"
 ask DASHBOARD_PASSWORD "Dashboard password (10+ characters)" secret
 [[ "$(env_get DASHBOARD_PASSWORD | wc -c)" -ge 11 ]] || fail "DASHBOARD_PASSWORD must be at least 10 characters"
 [[ -n "$(env_get WBIZ_DOCS_VERIFIED)" ]] || env_set WBIZ_DOCS_VERIFIED false
@@ -120,15 +115,13 @@ command -v certbot >/dev/null || apt-get install -y -qq certbot python3-certbot-
 certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos --redirect -m "${CERTBOT_EMAIL:-admin@aligned-tech.com}" \
   || fail "certbot failed. Does the DNS record for $DOMAIN point at this server?"
 
-say "Testing the Wbiztool credentials (/me/)"
-( cd "$APP" && sudo -u amina env ENV_FILE="$ENVF" "$APP/.venv/bin/python" -m app.cli check ) \
-  || echo "(!) Wbiztool rejected the settings above. Fix with:  sudo bash $SRC/deploy/set-secret.sh   (re-enter the API key)"
-
 say "Done: https://$DOMAIN"
 cat <<MSG
 Next:
-  1. Sign in at https://$DOMAIN and add Mom's medicines in the Medicines tab (or import your Excel file there).
-  2. Check the Wbiztool endpoint paths in $APP/app/wbiztool.py against https://wbiztool.com/docs/, then
-     sudo sed -i 's/^WBIZ_DOCS_VERIFIED=.*/WBIZ_DOCS_VERIFIED=true/' $ENVF && sudo systemctl restart amina
-  3. Reminders tab: Preview changes, read the list, approve.
+  1. Sign in at https://$DOMAIN, open Settings and enter the Wbiztool client ID, API key, WhatsApp client and the
+     two phone numbers, then press "Save & test connection".
+  2. Add Mom's medicines in the Medicines tab (or import your Excel file) and fill in her profile.
+  3. Check the Wbiztool endpoint paths in $APP/app/wbiztool.py against https://wbiztool.com/docs/, then tick the
+     confirmation box in Settings.
+  4. Reminders tab: Preview changes, read the list, approve.
 MSG

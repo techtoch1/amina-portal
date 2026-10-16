@@ -94,6 +94,20 @@ class Settings:
         if len(self.dashboard_password) < 10:
             raise SystemExit("DASHBOARD_PASSWORD must be set in .env (at least 10 characters).")
 
+    def apply_overrides(self, db):
+        """Values saved from the Settings page win over the server's env file."""
+        g = db.get_setting
+        v = g("conf.client_id")
+        if v is not None:
+            self.client_id = int(v) if v.isdigit() else None
+        for attr in ("api_key", "whatsapp_client", "mom_number", "my_number"):
+            v = g("conf." + attr)
+            if v is not None:
+                setattr(self, attr, v)
+        v = g("conf.docs_verified")
+        if v is not None:
+            self.docs_verified = v == "1"
+
     def redact(self, text):
         """Strip secrets from any string before it is logged or stored."""
         text = str(text)

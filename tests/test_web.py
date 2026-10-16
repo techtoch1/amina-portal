@@ -90,3 +90,33 @@ def test_mom_profile_and_status(settings):
     assert "130/80" in mom
     sid = mom.split('data-del-status="')[1].split('"')[0]
     assert c.delete(f"/api/status-log/{sid}", headers=h).status_code == 200
+
+
+def test_settings_page(settings):
+    settings.client_id = None
+    settings.api_key = ""
+    settings.whatsapp_client = ""
+    settings.mom_number = ""
+    settings.docs_verified = False
+    c = make(settings)
+    h = login(c, settings)
+    r = c.put("/api/config", json={"client_id": "7", "api_key": "S3CRET-KEY_value", "whatsapp_client": "42",
+                                   "mom_number": "+961 70 123456", "my_number": "96170999999", "docs_verified": True}, headers=h)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["api_key_set"] and body["api_key_length"] == 16 and body["mom_number"] == "96170123456"
+    assert "S3CRET" not in r.text and "S3CRET" not in c.get("/settings").text and "S3CRET" not in c.get("/").text
+    assert settings.client_id == 7 and settings.api_key == "S3CRET-KEY_value" and settings.docs_verified
+    # blank key keeps the saved one
+    c.put("/api/config", json={"api_key": "", "whatsapp_client": "43"}, headers=h)
+    assert settings.api_key == "S3CRET-KEY_value" and settings.whatsapp_client == "43"
+    for bad in ({"client_id": "abc"}, {"api_key": "has space"}, {"mom_number": "123"}, {"whatsapp_client": "a b"}):
+        assert c.put("/api/config", json=bad, headers=h).status_code == 400
+    assert c.put("/api/config", json={}).status_code == 403  # CSRF
+    assert c.post("/api/config/test", headers=h).json()["ok"]
+    # survives a restart: a fresh Settings object picks the values from the database
+    from app.config import Settings
+    from app.db import DB
+    s2 = Settings(data_dir=settings.data_dir)
+    s2.apply_overrides(DB(settings.db_path))
+    assert s2.client_id == 7 and s2.api_key == "S3CRET-KEY_value"

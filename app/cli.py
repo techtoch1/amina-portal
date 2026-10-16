@@ -30,6 +30,7 @@ def _key_report(s):
 
 def main(argv):
     s = Settings.from_env()
+    s.apply_overrides(DB(s.db_path))  # values saved on the Settings page
     cmd = argv[:1]
     if cmd in (["me"], ["check"]):
         if cmd == ["check"]:

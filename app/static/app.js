@@ -108,6 +108,28 @@
     };
   }
 
+  // ---------------- Settings ----------------
+  if (page === 'settings') {
+    const f = $('conf-form'), out = $('conf-result');
+    const show = (ok, msg) => { out.textContent = msg; out.className = ok ? 'ok' : 'err'; };
+    const body = () => ({client_id: f.client_id.value, api_key: f.api_key.value, whatsapp_client: f.whatsapp_client.value,
+      mom_number: f.mom_number.value, my_number: f.my_number.value, docs_verified: f.docs_verified.checked});
+    const save = async () => {
+      const {ok, data} = await call('PUT', '/api/config', body());
+      if (!ok) { show(false, data.error); return false; }
+      f.api_key.value = '';
+      f.api_key.placeholder = data.api_key_set ? '•••••• saved (' + data.api_key_length + ' characters) — leave blank to keep' : 'Paste the API key';
+      show(true, 'Saved ✔'); return true;
+    };
+    f.onsubmit = async (e) => { e.preventDefault(); await save(); };
+    $('conf-test').onclick = async () => {
+      show(true, 'Saving and testing…');
+      if (!(await save())) return;
+      const {ok, data} = await call('POST', '/api/config/test');
+      show(ok, ok ? 'Connected ✔ WhatsApp: ' + (typeof data.whatsapp === 'string' ? data.whatsapp : JSON.stringify(data.whatsapp)) : 'Failed: ' + data.error);
+    };
+  }
+
   // ---------------- Reminders / Wbiztool ----------------
   if (page === 'reminders') {
     fetch('/api/status', {credentials: 'same-origin'}).then((r) => r.json()).then((s) => {
@@ -116,7 +138,7 @@
         box.textContent = 'Wbiztool: ' + s.error; box.className = 'err';
         if (/api key|auth/i.test(s.error)) {
           $('wb-hint').hidden = false;
-          $('wb-hint').textContent = 'Wbiztool reached but rejected the key. Re-enter WBIZ_API_KEY (and check client_id / whatsapp_client) on the server: sudo bash ~/amina-portal/deploy/set-secret.sh';
+          $('wb-hint').textContent = 'Wbiztool was reached but rejected the credentials. Re-enter the API key (and check the client ID) in Settings.';
         }
         return;
       }

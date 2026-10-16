@@ -50,6 +50,7 @@ def create_app(settings=None, client=None):
     settings = settings or Settings.from_env()
     settings.validate()
     db = DB(settings.db_path)
+    settings.apply_overrides(db)
     client = client or WbizClient(settings)
     for handler in logging.getLogger().handlers:
         handler.addFilter(_Redact(settings))
@@ -231,6 +232,70 @@ def create_app(settings=None, client=None):
         body = await request.json()
         db.set_setting("copy_to_me", "1" if body.get("copy_to_me") else "0")
         return {"ok": True}
+
+    # ---- settings (Wbiztool credentials) ----
+    def _config_view():
+        return {"client_id": settings.client_id or "", "whatsapp_client": settings.whatsapp_client,
+                "mom_number": settings.mom_number, "my_number": settings.my_number,
+                "api_key_set": bool(settings.api_key), "api_key_length": len(settings.api_key),
+                "docs_verified": settings.docs_verified}
+
+    @app.get("/settings", response_class=HTMLResponse, dependencies=[Depends(auth)])
+    def settings_page(request: Request):
+        return page(request, "settings", conf=_config_view())
+
+    @app.put("/api/config", dependencies=[Depends(auth), Depends(csrf)])
+    async def save_config(request: Request):
+        body = await request.json()
+
+        def text(key, limit):
+            v = body.get(key)
+            return None if v is None else str(v).strip()[:limit]
+
+        cid = text("client_id", 12)
+        if cid is not None and cid != "" and not cid.isdigit():
+            raise HTTPException(400, "Client ID must be a number")
+        wa = text("whatsapp_client", 64)
+        if wa and any(ch.isspace() for ch in wa):
+            raise HTTPException(400, "WhatsApp client must not contain spaces")
+        numbers = {}
+        for key, label in (("mom_number", "Mom's number"), ("my_number", "Your number")):
+            v = text(key, 30)
+            if v is None:
+                continue
+            digits = "".join(ch for ch in v if ch.isdigit())
+            if digits and not 8 <= len(digits) <= 15:
+                raise HTTPException(400, f"{label} should be 8-15 digits including the country code")
+            numbers[key] = digits
+        key_value = text("api_key", 300)
+        if key_value and (any(ch.isspace() or ord(ch) < 33 or ord(ch) > 126 for ch in key_value)):
+            raise HTTPException(400, "API key has spaces or unusual characters — copy it again exactly from Wbiztool")
+        if cid is not None:
+            db.set_setting("conf.client_id", cid)
+        if wa is not None:
+            db.set_setting("conf.whatsapp_client", wa)
+        for k, v in numbers.items():
+            db.set_setting("conf." + k, v)
+        if key_value:  # blank = keep the saved key
+            db.set_setting("conf.api_key", key_value)
+        if "docs_verified" in body:
+            db.set_setting("conf.docs_verified", "1" if body["docs_verified"] else "0")
+        settings.apply_overrides(db)
+        cache["status"] = (0, None)
+        db.log_event("settings", True, "Wbiztool settings updated")
+        return _config_view()
+
+    @app.post("/api/config/test", dependencies=[Depends(auth), Depends(csrf)])
+    def test_config():
+        cache["status"] = (0, None)
+        if not settings.wbiz_configured:
+            return JSONResponse({"error": "Enter the client ID, API key and WhatsApp client first"}, status_code=400)
+        try:
+            client.me()
+            wa = client.client_status()
+        except WbizError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=502)
+        return {"ok": True, "whatsapp": wa.get("data") or wa.get("message") or "ok"}
 
     # ---- medicines API ----
     def _med_or_404(mid):

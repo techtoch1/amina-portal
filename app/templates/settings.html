@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block body %}
+<section class="card">
+  <h2>Wbiztool</h2>
+  <p class="muted">Find these in your Wbiztool account. The API key is stored on the server and is never shown again;
+    leave the field blank to keep the saved key.</p>
+  <form id="conf-form" class="stack" autocomplete="off">
+    <label>Client ID (number)
+      <input name="client_id" value="{{ conf.client_id }}" inputmode="numeric" maxlength="12"></label>
+    <label>API key
+      <input name="api_key" type="password" autocomplete="new-password" spellcheck="false" maxlength="300"
+        placeholder="{{ '•••••• saved (' ~ conf.api_key_length ~ ' characters) — leave blank to keep' if conf.api_key_set else 'Paste the API key' }}"></label>
+    <label>WhatsApp client
+      <input name="whatsapp_client" value="{{ conf.whatsapp_client }}" maxlength="64" spellcheck="false"></label>
+    <label>Mom's WhatsApp number (with country code)
+      <input name="mom_number" value="{{ conf.mom_number }}" inputmode="tel" maxlength="30" placeholder="96170123456"></label>
+    <label>Your WhatsApp number (for copies and the test message)
+      <input name="my_number" value="{{ conf.my_number }}" inputmode="tel" maxlength="30" placeholder="96170123456"></label>
+    <label class="check"><input type="checkbox" name="docs_verified" {{ 'checked' if conf.docs_verified }}>
+      I checked the Wbiztool endpoint paths in <code>app/wbiztool.py</code> against their docs — allow creating reminders and sending messages</label>
+    <p id="conf-result" role="status"></p>
+    <div class="row">
+      <button class="btn primary" type="submit">Save</button>
+      <button class="btn" type="button" id="conf-test">Save &amp; test connection</button>
+    </div>
+  </form>
+</section>
+{% endblock %}
