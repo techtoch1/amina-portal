@@ -145,3 +145,34 @@ def test_form_roundtrip():
     assert err is None and rec["last_date"] == "2026-10-20" and rec["start_date"] == ""
     back = rec_to_form(rec)
     assert back["frequency"] == "every_n" and back["every_n"] == 28 and back["date_kind"] == "last"
+
+
+def test_reminders_are_sent_with_a_name(settings):
+    from datetime import datetime
+    from app.schedule import build_desired
+    from app.sync import reminder_name
+    meds = load_medicines  # noqa: F841 (keeps import used)
+
+    class Spy(WbizClient):
+        def __init__(self, s):
+            super().__init__(s)
+            self.sent = []
+
+        def _post(self, path, fields=None):
+            self.sent.append((path, dict(fields)))
+            return {"status": 1, "reminder_id": "r1"}
+
+    spy = Spy(settings)
+    spy.create_reminder("96170000001", "msg", "0 8 * * *", "Asia/Beirut", "Meds 08:00 - Valtrex, Ator")
+    spy.schedule_message("96170000001", "msg", "2026-11-17 10:00", "Asia/Beirut", "Meds 11-17 10:00 - Shot")
+    for _path, f in spy.sent:
+        assert f["name"] and f["reminder_name"] == f["name"] and all(isinstance(v, str) for v in f.values())
+    spy.create_reminder("96170000001", "msg", "0 8 * * *", "Asia/Beirut")  # a default is always supplied
+    assert spy.sent[-1][1]["name"] == "Medicine reminder"
+
+    from app.excel import Medicine
+    m = Medicine(row=1, name="Valtrex", dose="", instruction="", purpose="", kind="daily", times=["08:00", "20:00"])
+    d = build_desired([m], datetime(2026, 10, 16, 7, 0), "Asia/Beirut", [("mom", "1"), ("me", "2")])
+    assert [reminder_name(x) for x in d] == ["Meds 08:00 - Valtrex", "Copy Meds 08:00 - Valtrex", "Meds 20:00 - Valtrex", "Copy Meds 20:00 - Valtrex"]
+    long = Medicine(row=2, name="A" * 200, dose="", instruction="", purpose="", kind="daily", times=["08:00"])
+    assert len(reminder_name(build_desired([long], datetime(2026, 10, 16, 7, 0), "Asia/Beirut", [("mom", "1")])[0])) <= 80

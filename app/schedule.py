@@ -121,7 +121,14 @@ def build_desired(meds, now, tz_name, recipients):
                            ensure_ascii=False).encode()
             ).hexdigest()[:32]
             out.append(Desired(g["kind"], g["cron"], g["fire_at"], message, names, who, phone, group_key, fp))
-    return sorted(out, key=lambda d: (d.kind, d.when, d.recipient))
+    def order(d):  # by clock time (not as text), Mom before the copy to me
+        who = 0 if d.recipient == "mom" else 1
+        if d.kind == "cron":
+            minute, hour, _d, _m, dow = d.cron.split()
+            return (0, int(hour), int(minute), dow, who, "")
+        return (1, 0, 0, d.fire_at, who, "")
+
+    return sorted(out, key=order)
 
 
 def _only_time(med, t):

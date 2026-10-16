@@ -65,11 +65,23 @@ def plan_to_json(plan):
             "cancel": [x(r) for r in plan["cancel"]], "keep": len(plan["keep"])}
 
 
-def _create(client, settings, db, d):
+def reminder_name(d):
+    """A short readable name, e.g. 'Meds 08:00 - Valtrex, Ator' (copies are prefixed 'Copy')."""
     if d.kind == "cron":
-        rid = client.create_reminder(d.phone, d.message, d.cron, settings.timezone)
+        minute, hour = d.cron.split()[:2]
+        when = f"{int(hour):02d}:{int(minute):02d}"
     else:
-        rid = client.schedule_message(d.phone, d.message, d.fire_at, settings.timezone)
+        when = d.fire_at[5:]  # 'MM-DD HH:MM'
+    text = f"{'Copy ' if d.recipient == 'me' else ''}Meds {when} - {', '.join(d.names)}"
+    return text if len(text) <= 80 else text[:77] + "..."
+
+
+def _create(client, settings, db, d):
+    name = reminder_name(d)
+    if d.kind == "cron":
+        rid = client.create_reminder(d.phone, d.message, d.cron, settings.timezone, name)
+    else:
+        rid = client.schedule_message(d.phone, d.message, d.fire_at, settings.timezone, name)
     db.add_reminder(d, rid)
     return rid
 

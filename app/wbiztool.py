@@ -33,6 +33,7 @@ PATHS = {
 }
 
 FIELDS = {
+    "name": "name",  # Wbiztool answered "Reminder name cannot be null" when this was missing
     "phone": "phone",
     "message": "msg",
     "cron": "cron",
@@ -41,6 +42,9 @@ FIELDS = {
     "reminder_id": "reminder_id",
     "message_id": "msg_id",
 }
+# Extra keys that carry the same name. The exact field name isn't confirmed (the error only says
+# "Reminder name"), and unknown extra string fields are normally ignored, so both are sent.
+NAME_ALIASES = ("reminder_name",)
 # keys searched (recursively) in a response to find the id of a created item
 ID_KEYS = ("reminder_id", "msg_id", "message_id", "id")
 
@@ -143,23 +147,29 @@ class WbizClient:
         return self._post(PATHS["reminder_list"])
 
     # ---- mutating (blocked until docs verified) ----
-    def create_reminder(self, phone, message, cron, tz):
+    def _named(self, fields, name):
+        fields[FIELDS["name"]] = name
+        for alias in NAME_ALIASES:
+            fields[alias] = name
+        return fields
+
+    def create_reminder(self, phone, message, cron, tz, name=""):
         self._require_verified()
-        data = self._post(PATHS["reminder_create"], {
+        data = self._post(PATHS["reminder_create"], self._named({
             FIELDS["phone"]: phone, FIELDS["message"]: message, FIELDS["cron"]: cron, FIELDS["timezone"]: tz,
-        })
+        }, name or "Medicine reminder"))
         return _find_id(data)
 
     def cancel_reminder(self, remote_id):
         self._require_verified()
         self._post(PATHS["reminder_cancel"], {FIELDS["reminder_id"]: remote_id})
 
-    def schedule_message(self, phone, message, fire_at, tz):
+    def schedule_message(self, phone, message, fire_at, tz, name=""):
         self._require_verified()
-        data = self._post(PATHS["schedule_msg"], {
+        data = self._post(PATHS["schedule_msg"], self._named({
             FIELDS["phone"]: phone, FIELDS["message"]: message,
             FIELDS["schedule_time"]: fire_at, FIELDS["timezone"]: tz,
-        })
+        }, name or "Medicine reminder"))
         return _find_id(data)
 
     def cancel_scheduled(self, remote_id):
