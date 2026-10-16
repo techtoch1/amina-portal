@@ -20,8 +20,12 @@ HEADERS = {
     "day": ["day", "days", "weekday", "day of week", "اليوم", "الايام"],
     "start_date": ["start date", "start", "first dose", "next date", "next dose", "تاريخ البدء", "تاريخ البداية"],
     "last_date": ["last date", "last dose", "last taken", "اخر جرعة", "تاريخ اخر جرعة"],
-    "instruction": ["instruction", "instructions", "التعليمات", "تعليمات", "الارشادات"],
-    "purpose": ["purpose", "for", "used for", "indication", "what for", "الغرض", "الاستخدام", "لماذا", "دواعي الاستعمال"],
+    "instruction": ["instruction", "instructions", "arabic", "بالعربي", "التعليمات", "تعليمات", "الارشادات", "متى يؤخذ"],
+    "purpose": ["purpose", "for", "used for", "indication", "what for"],
+    "purpose_ar": ["purpose (arabic)", "for (arabic)", "الغرض", "الاستخدام", "لماذا", "دواعي الاستعمال"],
+    "when_en": ["when to take", "when", "how to take", "directions", "how often"],
+    "notes_en": ["notes", "note", "comments", "remarks"],
+    "notes_ar": ["notes (arabic)", "ملاحظات", "ملاحظه"],
 }
 
 WEEKDAYS = {  # python weekday(): Mon=0
@@ -55,11 +59,15 @@ class Medicine:
     dose: str
     instruction: str
     purpose: str
-    kind: str  # daily | weekly | every_n | as_needed
+    kind: str  # daily | weekly | every_n | as_needed | chart_only
     times: list = field(default_factory=list)  # ["08:00", ...]
     weekdays: list = field(default_factory=list)  # python weekdays, for weekly
     every_n: int | None = None
     anchor: date | None = None  # a date the every_n cycle falls on
+    when_en: str = ""
+    purpose_ar: str = ""
+    notes_en: str = ""
+    notes_ar: str = ""
 
 
 @dataclass
@@ -154,8 +162,12 @@ def find_weekdays(text):
     return found
 
 
-AS_NEEDED = ["as needed", "prn", "when needed", "if needed", "عند الحاجه", "اذا لزم", "حسب الحاجه", "عند اللزوم"]
-DAILY = ["daily", "every day", "once a day", "everyday", "يوميا", "يومي", "كل يوم"]
+AS_NEEDED = ["as needed", "prn", "when needed", "if needed", "when required", "when in pain", "in pain", "up to",
+             "عند الحاجه", "اذا لزم", "حسب الحاجه", "عند اللزوم"]
+NO_REMINDER = ["no reminder", "chart only", "بدون تذكير"]
+DAILY = ["daily", "every day", "once a day", "everyday", "every morning", "every night", "every evening",
+         "in the morning", "in the evening", "at night", "before sleep", "before bed", "times a day",
+         "يوميا", "يومي", "كل يوم", "كل صباح", "كل ليله"]
 WEEKLY = ["weekly", "every week", "once a week", "اسبوعيا", "اسبوعي", "كل اسبوع"]
 
 
@@ -163,6 +175,8 @@ def classify_frequency(text):
     """Return (kind, every_n, problems). kind: daily|weekly|every_n|as_needed|None."""
     if not text:
         return None, None, ["missing frequency"]
+    if any(k in text for k in NO_REMINDER):
+        return "chart_only", None, []
     if any(k in text for k in AS_NEEDED):
         return "as_needed", None, []
     m = re.search(r"every\s+(\d+)\s*(day|days|week|weeks)\b", text) or re.search(
@@ -218,7 +232,7 @@ def parse_row(row_no, rec):
         problems.append("frequency is empty (a day is given — is it weekly?)")
 
     times, anchor, weekdays = [], None, []
-    if kind and kind != "as_needed":
+    if kind and kind not in ("as_needed", "chart_only"):
         times, tprob = parse_times(rec.get("times"))
         problems += tprob
 
@@ -251,10 +265,13 @@ def parse_row(row_no, rec):
         row=row_no, name=name, dose=_text(rec.get("dose")), instruction=_text(rec.get("instruction")),
         purpose=_text(rec.get("purpose")), kind=kind, times=times, weekdays=weekdays,
         every_n=n if kind == "every_n" else None, anchor=anchor,
+        when_en=_text(rec.get("when_en")), purpose_ar=_text(rec.get("purpose_ar")),
+        notes_en=_text(rec.get("notes_en")), notes_ar=_text(rec.get("notes_ar")),
     )
 
 
-FIELDS = ["name", "dose", "times", "frequency", "day", "start_date", "last_date", "instruction", "purpose"]
+FIELDS = ["name", "dose", "times", "frequency", "day", "start_date", "last_date", "instruction", "purpose",
+          "when_en", "purpose_ar", "notes_en", "notes_ar"]
 
 
 def cell_text(v):
@@ -276,9 +293,21 @@ def cell_text(v):
     return str(v).strip()
 
 
+AS_NEEDED_HEADS = ["as needed", "prn", "عند الحاجه"]
+REGULAR_HEADS = ["regular", "scheduled", "منتظم"]
+
+
+def infer_frequency(text):
+    """Free text like 'Twice daily (morning & evening)' -> a canonical frequency, or ''."""
+    kind, n, _ = classify_frequency(norm(text))
+    return {"daily": "daily", "weekly": "weekly", "as_needed": "as needed",
+            "every_n": f"every {n} days"}.get(kind, "")
+
+
 def read_sheet(source):
     """Read the first sheet. source: a path or a file-like object.
-    Returns ([(row_number, rec_of_strings)], [errors])."""
+    Handles title rows above the header, REGULAR / AS NEEDED section rows and free-text
+    'When to take' columns. Returns ([(row_number, rec_of_strings)], [errors])."""
     try:
         wb = load_workbook(source, data_only=True, read_only=True)
     except Exception as exc:  # corrupt / not xlsx / locked
@@ -289,15 +318,35 @@ def read_sheet(source):
         wb.close()
     if not rows:
         return [], ["The Excel sheet is empty"]
-    cols = _column_map(rows[0])
-    missing = [c for c in ("name", "times", "frequency") if c not in cols]
-    if missing:
-        return [], ["Missing required column(s) in the header row: " + ", ".join(missing)]
-    out = []
-    for offset, cells in enumerate(rows[1:], start=2):
-        rec = {c: cell_text(cells[i] if i < len(cells) else None) for c, i in cols.items()}
-        if any(rec.values()):
-            out.append((offset, {f: rec.get(f, "") for f in FIELDS}))
+    head, cols = None, {}
+    for i, row in enumerate(rows[:25]):
+        found = _column_map(row)
+        if "name" in found and len(found) >= 2:
+            head, cols = i, found
+            break
+    if head is None:
+        return [], ["Couldn't find the header row. It needs a 'Medication' (or Name) column plus at least one more, e.g. Dose or When to take"]
+    out, section = [], None
+    for offset, cells in enumerate(rows[head + 1:], start=head + 2):
+        rec = {f: cell_text(cells[cols[f]] if f in cols and cols[f] < len(cells) else None) for f in FIELDS}
+        if not any(rec.values()):
+            continue
+        if rec["name"] and not any(v for k, v in rec.items() if k != "name"):
+            low = norm(rec["name"])  # a section title or a footnote, not a medicine
+            if any(k in low for k in AS_NEEDED_HEADS):
+                section = "as_needed"
+                continue
+            if any(k in low for k in REGULAR_HEADS):
+                section = "regular"
+                continue
+            if low.startswith(("note", "ملاحظ")) or len(low) > 60:
+                continue
+        if not rec["frequency"]:
+            if section == "as_needed":
+                rec["frequency"] = "as needed"
+            elif rec["when_en"]:
+                rec["frequency"] = infer_frequency(rec["when_en"])
+        out.append((offset, rec))
     return out, []
 
 
@@ -342,10 +391,10 @@ def form_to_rec(data):
     if not name:
         return None, "Medicine name is required"
     freq = s("frequency", 20)
-    if freq not in ("daily", "weekly", "every_n", "as_needed"):
+    if freq not in ("daily", "weekly", "every_n", "as_needed", "chart_only"):
         return None, "Choose how often the medicine is taken"
     times = []
-    if freq != "as_needed":
+    if freq not in ("as_needed", "chart_only"):
         for t in data.get("times") or []:
             if not isinstance(t, str) or not _HHMM.match(t):
                 return None, f"'{t}' is not a valid time"
@@ -354,11 +403,15 @@ def form_to_rec(data):
             return None, "Add at least one time"
         times = sorted(set(times))
     rec = {"name": name, "dose": s("dose", 80), "times": ", ".join(times), "frequency": "", "day": "",
-           "start_date": "", "last_date": "", "instruction": s("instruction", 300), "purpose": s("purpose", 200)}
+           "start_date": "", "last_date": "", "instruction": s("instruction", 300), "purpose": s("purpose", 200),
+           "when_en": s("when_en", 300), "purpose_ar": s("purpose_ar", 200),
+           "notes_en": s("notes_en", 500), "notes_ar": s("notes_ar", 500)}
     if freq == "daily":
         rec["frequency"] = "daily"
     elif freq == "as_needed":
         rec["frequency"] = "as needed"
+    elif freq == "chart_only":
+        rec["frequency"] = "chart only"
     elif freq == "weekly":
         days = sorted({d for d in (data.get("weekdays") or []) if isinstance(d, int) and 0 <= d <= 6})
         if not days:
@@ -391,4 +444,6 @@ def rec_to_form(rec):
         "date": rec.get("start_date") or rec.get("last_date") or "",
         "date_kind": "last" if (rec.get("last_date") and not rec.get("start_date")) else "start",
         "instruction": rec.get("instruction", ""), "purpose": rec.get("purpose", ""),
+        "when_en": rec.get("when_en", ""), "purpose_ar": rec.get("purpose_ar", ""),
+        "notes_en": rec.get("notes_en", ""), "notes_ar": rec.get("notes_ar", ""),
     }

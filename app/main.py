@@ -18,7 +18,7 @@ from .db import DB
 from io import BytesIO
 from zoneinfo import ZoneInfo
 
-from .excel import form_to_rec, load_from_db, read_sheet, rec_to_form
+from .excel import classify_frequency, form_to_rec, load_from_db, norm, read_sheet, rec_to_form
 from .schedule import describe, next_injections, today_agenda
 from .sync import apply_plan, compute_plan, copy_enabled, local_now, plan_to_json, rollover
 from .wbiztool import WbizClient, WbizError
@@ -162,6 +162,47 @@ def create_app(settings=None, client=None):
             rows.append({"r": r, "desc": describe(m) if m else "", "problems": rv.reasons if rv else [],
                          "stopped": not r["active"]})
         return page(request, "medicines", rows=rows, day_names=DAY_NAMES)
+
+    CHART_LABELS = {
+        "en": {"title": "Medicines", "dir": "ltr", "updated": "Updated", "prescriber": "Prescriber", "allergies": "Allergies",
+               "cols": ["Medication", "Dose", "When to take", "For", "Notes"], "regular": "Regular",
+               "as_needed": "As needed", "next": "Next", "print": "Print / save as PDF", "other": "العربية",
+               "empty": "No medicines yet."},
+        "ar": {"title": "الأدوية", "dir": "rtl", "updated": "آخر تحديث", "prescriber": "الطبيب", "allergies": "الحساسية",
+               "cols": ["الدواء", "الجرعة", "متى يؤخذ", "لماذا", "ملاحظات"], "regular": "أدوية منتظمة",
+               "as_needed": "عند الحاجة", "next": "الموعد القادم", "print": "طباعة / حفظ PDF", "other": "English",
+               "empty": "لا توجد أدوية بعد."},
+    }
+
+    @app.get("/chart", dependencies=[Depends(auth)])
+    def chart_redirect():
+        return RedirectResponse("/chart/en", status_code=303)
+
+    @app.get("/chart/{lang}", response_class=HTMLResponse, dependencies=[Depends(auth)])
+    def chart_page(request: Request, lang: str):
+        if lang not in CHART_LABELS:
+            raise HTTPException(404, "Unknown language")
+        res, _stopped = load_from_db(db)
+        parsed = {m.row: m for m in res.medicines}
+        now = local_now(settings)
+        nxt = dict((m.row, at) for m, at in next_injections(res.medicines, now))
+        groups = {"regular": [], "as_needed": []}
+        for r in sorted(db.list_medicines(), key=lambda x: x["id"]):  # same order as entered / imported
+            if not r["active"]:
+                continue
+            kind, _n, _p = classify_frequency(norm(r["frequency"]))
+            m = parsed.get(r["id"])
+            desc = describe(m) if m else ""
+            ar = lang == "ar"
+            groups["as_needed" if kind == "as_needed" else "regular"].append({
+                "name": r["name"], "dose": r["dose"],
+                "when": (r["instruction"] if ar else r["when_en"]) or desc,
+                "purpose": (r["purpose_ar"] or r["purpose"]) if ar else r["purpose"],
+                "notes": (r["notes_ar"] or r["notes_en"]) if ar else r["notes_en"],
+                "next": nxt.get(r["id"]),
+            })
+        return page(request, "chart", lang=lang, L=CHART_LABELS[lang], groups=groups,
+                    updated=now.strftime("%d %b %Y"))
 
     @app.get("/mom", response_class=HTMLResponse, dependencies=[Depends(auth)])
     def mom_page(request: Request):

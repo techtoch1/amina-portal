@@ -7,7 +7,9 @@
     <input id="xlsx" type="file" accept=".xlsx" hidden>
   </div>
   <p class="muted">Changes here update the reminders after you press <em>Sync</em> on the <a href="/reminders">Reminders</a> tab.
-    Excel columns: Name, Time, Frequency (required); Dose, Day, Start date, Instruction, Purpose.</p>
+    The Excel import understands a sheet laid out like your medicine chart (Medication, Dose, When to take, For, Notes, بالعربي,
+    with REGULAR / AS NEEDED section rows). Clock times are not in such a sheet, so imported medicines
+    are marked <em>Needs review</em> until you add the times.</p>
   <p id="import-result" role="status"></p>
 </section>
 
@@ -21,9 +23,12 @@
     {% if row.problems %}<span class="chip bad">Needs review</span>{% endif %}
   </div>
   {% if row.desc %}<div>{{ row.desc }}</div>{% endif %}
+  {% if r.when_en %}<div dir="auto">{{ r.when_en }}</div>{% endif %}
   {% if row.problems %}<ul class="problems">{% for p in row.problems %}<li>{{ p }}</li>{% endfor %}</ul>{% endif %}
-  {% if r.purpose %}<div class="purpose" dir="auto">{{ r.purpose }}</div>{% endif %}
+  {% if r.purpose %}<div class="purpose" dir="auto">For: {{ r.purpose }}</div>{% endif %}
+  {% if r.notes_en %}<div class="purpose" dir="auto">{{ r.notes_en }}</div>{% endif %}
   {% if r.instruction %}<div class="ar" dir="rtl" lang="ar">{{ r.instruction }}</div>{% endif %}
+  {% if r.notes_ar %}<div class="ar purpose" dir="rtl" lang="ar">{{ r.notes_ar }}</div>{% endif %}
   <div class="row">
     <button class="btn small" data-edit="{{ r.id }}">Edit</button>
     <button class="btn small" data-active="{{ r.id }}" data-to="{{ '1' if row.stopped else '0' }}">{{ 'Resume' if row.stopped else 'Stop taking' }}</button>
@@ -38,28 +43,48 @@
   <form id="med-form" method="dialog">
     <h2 id="med-title">Add medicine</h2>
     <label>Name<input name="name" required maxlength="120" dir="auto"></label>
-    <label>Dose<input name="dose" maxlength="80" placeholder="e.g. 500 mg, 1 tablet" dir="auto"></label>
-    <label>What it is for<input name="purpose" maxlength="200" dir="auto"></label>
-    <label>Instruction (Arabic, sent in the message)<input name="instruction" maxlength="300" dir="rtl" lang="ar"></label>
-    <label>How often
-      <select name="frequency" required>
-        <option value="">Choose…</option>
-        <option value="daily">Every day</option>
-        <option value="weekly">Certain days of the week</option>
-        <option value="every_n">Every N days (e.g. injection)</option>
-        <option value="as_needed">As needed (no reminders)</option>
-      </select></label>
-    <fieldset id="f-weekly" hidden><legend>Days</legend>
-      <div class="days">{% for d in day_names %}<label class="check"><input type="checkbox" name="wd" value="{{ loop.index0 }}">{{ d }}</label>{% endfor %}</div></fieldset>
-    <fieldset id="f-everyn" hidden><legend>Repeat</legend>
-      <label>Every <input name="every_n" type="number" min="1" max="365" inputmode="numeric" class="short"> days</label>
-      <label>Date
-        <input name="date" type="date"></label>
-      <label>That date is the
-        <select name="date_kind"><option value="start">next dose</option><option value="last">last dose already taken</option></select></label></fieldset>
-    <fieldset id="f-times"><legend>Times</legend>
-      <div id="times"></div>
-      <button type="button" class="btn small" id="add-time">+ Add time</button></fieldset>
+    <label>Dose<input name="dose" maxlength="80" placeholder="e.g. 500 mg" dir="auto"></label>
+
+    <fieldset><legend>English (chart)</legend>
+      <label>When to take <input name="when_en" maxlength="300" placeholder="e.g. Twice daily (morning &amp; evening)" dir="auto"></label>
+      <label>What it is for <input name="purpose" maxlength="200" dir="auto"></label>
+      <label>Notes <textarea name="notes_en" rows="2" maxlength="500" dir="auto"></textarea></label>
+    </fieldset>
+    <fieldset><legend>العربية (chart + WhatsApp message)</legend>
+      <label>How to take — this line is sent in the reminder
+        <input name="instruction" maxlength="300" dir="rtl" lang="ar" placeholder="حبة صباحاً ومساءً"></label>
+      <label>What it is for <input name="purpose_ar" maxlength="200" dir="rtl" lang="ar"></label>
+      <label>Notes <textarea name="notes_ar" rows="2" maxlength="500" dir="rtl" lang="ar"></textarea></label>
+    </fieldset>
+
+    <fieldset><legend>Reminders</legend>
+      <label>How often
+        <select name="frequency" required>
+          <option value="">Choose…</option>
+          <option value="daily">Every day</option>
+          <option value="weekly">Certain days of the week</option>
+          <option value="every_n">Every N days (e.g. injection)</option>
+          <option value="as_needed">As needed (no reminders)</option>
+          <option value="chart_only">Regular, but no reminders yet (chart only)</option>
+        </select></label>
+      <div id="f-weekly" hidden><span class="muted">Days</span>
+        <div class="days">{% for d in day_names %}<label class="check"><input type="checkbox" name="wd" value="{{ loop.index0 }}">{{ d }}</label>{% endfor %}</div></div>
+      <div id="f-everyn" hidden>
+        <label>Every <input name="every_n" type="number" min="1" max="365" inputmode="numeric" class="short"> days</label>
+        <label>Date <input name="date" type="date"></label>
+        <label>That date is the
+          <select name="date_kind"><option value="start">next dose</option><option value="last">last dose already taken</option></select></label></div>
+      <div id="f-times"><span class="muted">Times (the reminder is sent at each)</span>
+        <div id="times"></div>
+        <div class="row">
+          <button type="button" class="btn small" data-preset="08:00">Morning 08:00</button>
+          <button type="button" class="btn small" data-preset="13:00">Noon 13:00</button>
+          <button type="button" class="btn small" data-preset="20:00">Evening 20:00</button>
+          <button type="button" class="btn small" data-preset="22:00">Bedtime 22:00</button>
+          <button type="button" class="btn small" id="add-time">+ Other time</button>
+        </div>
+        <p class="muted">The chips only add a time you can then change. Use the times the doctor gave.</p></div>
+    </fieldset>
     <p id="med-error" class="err" role="alert"></p>
     <div class="row">
       <button class="btn primary" id="med-save" type="submit">Save</button>

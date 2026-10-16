@@ -24,7 +24,7 @@
       const f = form.frequency.value;
       $('f-weekly').hidden = f !== 'weekly';
       $('f-everyn').hidden = f !== 'every_n';
-      $('f-times').hidden = f === 'as_needed';
+      $('f-times').hidden = f === 'as_needed' || f === 'chart_only';
     };
     const addTime = (v) => {
       const row = el('div', null, 'timerow');
@@ -37,8 +37,8 @@
       v = v || {};
       form.reset(); $('times').replaceChildren(); $('med-error').textContent = '';
       $('med-title').textContent = title;
-      form.name.value = v.name || ''; form.dose.value = v.dose || ''; form.purpose.value = v.purpose || '';
-      form.instruction.value = v.instruction || ''; form.frequency.value = v.frequency || '';
+      ['name', 'dose', 'purpose', 'instruction', 'when_en', 'purpose_ar', 'notes_en', 'notes_ar'].forEach((k) => { form[k].value = v[k] || ''; });
+      form.frequency.value = v.frequency || '';
       form.every_n.value = v.every_n || ''; form.date.value = v.date || ''; form.date_kind.value = v.date_kind || 'start';
       form.querySelectorAll('[name=wd]').forEach((c) => { c.checked = (v.weekdays || []).includes(Number(c.value)); });
       (v.times && v.times.length ? v.times : ['']).forEach(addTime);
@@ -46,12 +46,18 @@
     };
     form.frequency.onchange = syncFields;
     $('add-time').onclick = () => addTime('');
+    document.querySelectorAll('[data-preset]').forEach((b) => b.onclick = () => {
+      const existing = [...document.querySelectorAll('#times .t')];
+      const blank = existing.find((i) => !i.value);
+      if (blank) blank.value = b.dataset.preset; else addTime(b.dataset.preset);
+    });
     $('add-med').onclick = () => { editId = null; open('Add medicine'); };
     $('med-cancel').onclick = () => dlg.close();
     form.onsubmit = async (e) => {
       e.preventDefault();
       const body = {
         name: form.name.value, dose: form.dose.value, purpose: form.purpose.value, instruction: form.instruction.value,
+        when_en: form.when_en.value, purpose_ar: form.purpose_ar.value, notes_en: form.notes_en.value, notes_ar: form.notes_ar.value,
         frequency: form.frequency.value, every_n: form.every_n.value, date: form.date.value, date_kind: form.date_kind.value,
         weekdays: [...form.querySelectorAll('[name=wd]:checked')].map((c) => Number(c.value)),
         times: [...document.querySelectorAll('#times .t')].map((i) => i.value).filter(Boolean),
@@ -85,6 +91,9 @@
       setTimeout(() => location.reload(), 900);
     };
   }
+
+  // ---------------- Chart ----------------
+  if (page === 'chart') { $('print-btn').onclick = () => window.print(); }
 
   // ---------------- Mom ----------------
   if (page === 'mom') {

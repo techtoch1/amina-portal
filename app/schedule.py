@@ -29,7 +29,7 @@ def occurs_on(med, d):
 
 def next_occurrence(med, now):
     """First datetime strictly after `now` (naive local) the medicine is due, or None."""
-    if med.kind == "as_needed":
+    if med.kind in ("as_needed", "chart_only"):
         return None
     horizon = (med.every_n or 7) + 2
     for offset in range(horizon + 1):
@@ -85,7 +85,7 @@ def build_desired(meds, now, tz_name, recipients):
     """recipients: [("mom", phone), ("me", phone)]. Groups medicines due at the same moment."""
     groups = {}  # key -> {"kind", "cron", "fire_at", "meds"}
     for m in meds:
-        if m.kind == "as_needed":
+        if m.kind in ("as_needed", "chart_only"):
             continue
         for t in m.times:
             hh, mm = int(t[:2]), int(t[3:])
@@ -145,4 +145,6 @@ def describe(med):
         return f"Every {', '.join(_DAYS[d] for d in med.weekdays)} at {times}"
     if med.kind == "every_n":
         return f"Every {med.every_n} days at {times} (cycle includes {med.anchor.strftime('%d %b %Y')})"
+    if med.kind == "chart_only":
+        return "On the chart only (no reminders)"
     return "As needed (no reminders)"

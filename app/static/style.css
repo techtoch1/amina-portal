@@ -56,3 +56,30 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 .msg{white-space:pre-wrap;text-align:right;unicode-bidi:plaintext;font:inherit}
 details{padding:6px 0;border-top:1px solid var(--line)}summary{cursor:pointer}
 code{font-size:.85em}
+/* medicine chart */
+.chart-title{font-size:1.15rem;margin:.6rem 0 .2rem}
+.allergy{color:var(--bad);margin:.2rem 0 .6rem}
+.sect{margin:1.2rem 0 .4rem;padding:6px 10px;border-radius:8px;background:var(--line)}
+.chart-table{width:100%;border-collapse:collapse;background:var(--card)}
+.chart-table th,.chart-table td{border:1px solid var(--line);padding:8px 10px;text-align:start;vertical-align:top}
+.chart-table th{background:var(--line);font-size:.85rem}
+.chart-note{margin-top:1rem;padding:8px 10px;border:1px dashed var(--warnline);border-radius:8px;background:var(--warnbg)}
+@media (max-width:640px){
+  .chart-table thead{display:none}
+  .chart-table,.chart-table tbody,.chart-table tr,.chart-table td{display:block;width:100%}
+  .chart-table tr{margin:10px 0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .chart-table td{border:0;border-bottom:1px solid var(--line)}
+  .chart-table td:last-child{border-bottom:0}
+  .chart-table td:empty{display:none}
+  .chart-table td::before{content:attr(data-label);display:block;font-size:.75rem;color:var(--muted)}
+}
+@media print{
+  .top,.tabs,.noprint,.btn{display:none!important}
+  body{background:#fff;color:#000}
+  .chart-table,.chart-table tbody,.chart-table tr,.chart-table td{display:revert}
+  .chart-table thead{display:table-header-group}
+  .chart-table td::before{display:none}
+  .card{border:0}
+}
+
+a.btn{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;color:var(--fg)}

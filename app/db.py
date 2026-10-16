@@ -52,6 +52,10 @@ class DB:
         self.path = str(path)
         with self.conn() as c:
             c.executescript(SCHEMA)
+            have = {r["name"] for r in c.execute("PRAGMA table_info(medicines)")}
+            for col in ("when_en", "purpose_ar", "notes_en", "notes_ar"):  # added after the first release
+                if col not in have:
+                    c.execute(f"ALTER TABLE medicines ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
         try:  # holds the API key and health data: owner-only
             os.chmod(self.path, 0o600)
         except OSError:
@@ -108,7 +112,8 @@ class DB:
             return c.execute("SELECT 1 FROM reminders WHERE group_key=? LIMIT 1", (group_key,)).fetchone() is not None
 
     # ---- medicines ----
-    MED_FIELDS = ("name", "dose", "times", "frequency", "day", "start_date", "last_date", "instruction", "purpose")
+    MED_FIELDS = ("name", "dose", "times", "frequency", "day", "start_date", "last_date", "instruction", "purpose",
+                  "when_en", "purpose_ar", "notes_en", "notes_ar")
 
     def list_medicines(self):
         with self.conn() as c:
@@ -122,8 +127,8 @@ class DB:
     def add_medicine(self, rec, active=True):
         with self.conn() as c:
             cur = c.execute(
-                "INSERT INTO medicines(name,dose,times,frequency,day,start_date,last_date,instruction,purpose,active,created_at)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO medicines(name,dose,times,frequency,day,start_date,last_date,instruction,purpose,"
+                "when_en,purpose_ar,notes_en,notes_ar,active,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (*[rec.get(f, "") for f in self.MED_FIELDS], int(active), now_iso()))
             return cur.lastrowid
 

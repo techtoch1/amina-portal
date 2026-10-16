@@ -15,6 +15,7 @@
 <nav class="tabs" aria-label="Sections">
   <a href="/" {% if active_page == 'today' %}aria-current="page"{% endif %}>Today</a>
   <a href="/medicines" {% if active_page == 'medicines' %}aria-current="page"{% endif %}>Medicines{% if review_count %} <span class="badge">{{ review_count }}</span>{% endif %}</a>
+  <a href="/chart/en" {% if active_page == 'chart' %}aria-current="page"{% endif %}>Chart</a>
   <a href="/mom" {% if active_page == 'mom' %}aria-current="page"{% endif %}>Mom</a>
   <a href="/reminders" {% if active_page == 'reminders' %}aria-current="page"{% endif %}>Reminders{% if pending %} <span class="badge">{{ pending }}</span>{% endif %}</a>
   <a href="/settings" {% if active_page == 'settings' %}aria-current="page"{% endif %}>Settings{% if not configured %} <span class="badge">!</span>{% endif %}</a>
