@@ -1,5 +1,6 @@
 import csv
 import hashlib
+import json
 import hmac
 import io
 import logging
@@ -33,13 +34,13 @@ from .wbiztool import WbizClient, WbizError
 HERE = Path(__file__).parent
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 PROFILE_FIELDS = {"name": 120, "age": 40, "conditions": 1000, "allergies": 1000, "doctor": 120, "doctor_phone": 40,
-                  "emergency_contact": 200, "pharmacy": 200, "notes": 2000}
-STATUS_KINDS = ["Doctor visit", "Appointment", "Lab test", "Blood pressure", "Blood sugar", "Weight", "Temperature",
-                "Mood / condition", "Note"]
+                  "emergency_contact": 200, "pharmacy": 200, "care_team": 2000, "notes": 2000}
+STATUS_KINDS = ["Doctor visit", "Appointment", "Lab test", "Treatment", "Hospital", "Blood pressure", "Blood sugar", "Weight",
+                "Temperature", "Mood / condition", "Note"]
 LOG_KIND_AR = {"Doctor visit": "زيارة الطبيب", "Appointment": "موعد", "Lab test": "فحص مخبري", "Blood pressure": "ضغط الدم",
                "Blood sugar": "سكر الدم", "Weight": "الوزن", "Temperature": "الحرارة", "Mood / condition": "الحالة العامة",
-               "Note": "ملاحظة"}
-READING_KINDS_EXCLUDED = ("Doctor visit", "Appointment", "Lab test", "Note")
+               "Note": "ملاحظة", "Treatment": "علاج", "Hospital": "المستشفى"}
+READING_KINDS_EXCLUDED = ("Doctor visit", "Appointment", "Lab test", "Treatment", "Hospital", "Note")
 MAX_UPLOAD = 2 * 1024 * 1024
 TEST_MIN_INTERVAL = 3.0  # seconds between manual test sends
 TEST_HEADER = "🧪 رسالة تجريبية — Test message (not a real reminder)\n\n"
@@ -686,6 +687,80 @@ def create_app(settings=None, client=None):
             raise HTTPException(400, "That time is not valid")
         db.add_status(kind, value, note, when.isoformat(), raw_time)
         return {"ok": True}
+
+    # ---- import / export of the profile and log (backup, or filling them in from a file) ----
+    def _valid_time(t):
+        return bool(re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", t))
+
+    @app.get("/api/mom-export", dependencies=[Depends(auth)])
+    def mom_export():
+        log = [{"kind": r["kind"], "date": r["event_date"], "time": r["event_time"], "value": r["value"], "note": r["note"]}
+               for r in reversed(db.list_status(5000))]
+        body = json.dumps({"version": 1, "profile": db.profile(), "log": log}, ensure_ascii=False, indent=1)
+        return Response(body, media_type="application/json; charset=utf-8",
+                        headers={"Content-Disposition": 'attachment; filename="mom-profile-and-log.json"'})
+
+    @app.post("/api/mom-import", dependencies=[Depends(auth), Depends(csrf)])
+    async def mom_import(request: Request, overwrite: bool = False):
+        """Add profile fields and log entries from a JSON file. Everything is checked first; nothing is
+        imported if any entry is invalid. Profile fields that already have text are kept unless overwrite=true."""
+        raw = await request.body()
+        if len(raw) > 1_000_000:
+            raise HTTPException(413, "File is too large (1 MB max)")
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            raise HTTPException(400, "That is not a valid JSON file")
+        if not isinstance(data, dict):
+            raise HTTPException(400, "The file should contain a profile and/or a log")
+        ignored, problems, prof = [], [], {}
+        for key, value in (data.get("profile") or {}).items() if isinstance(data.get("profile"), dict) else []:
+            if key in PROFILE_FIELDS:
+                prof[key] = str(value or "").strip()[:PROFILE_FIELDS[key]]
+            else:
+                ignored.append(key)
+        entries, today = [], local_now(settings).date()
+        log_in = data.get("log") if isinstance(data.get("log"), list) else []
+        if len(log_in) > 500:
+            raise HTTPException(400, "Too many log entries (500 max)")
+        for i, e in enumerate(log_in, 1):
+            if not isinstance(e, dict) or e.get("kind") not in STATUS_KINDS:
+                problems.append(f"entry {i}: unknown type")
+                continue
+            value, note = str(e.get("value") or "").strip(), str(e.get("note") or "").strip()
+            if len(value) > 80 or len(note) > 500:
+                problems.append(f"entry {i}: value over 80 or note over 500 characters")
+            if not value and not note:
+                problems.append(f"entry {i}: empty")
+            try:
+                when = date.fromisoformat(str(e.get("date") or today.isoformat()))
+            except ValueError:
+                problems.append(f"entry {i}: invalid date")
+                continue
+            if abs((when - today).days) > 3660:
+                problems.append(f"entry {i}: date more than 10 years away")
+            etime = str(e.get("time") or "").strip()
+            if etime and not _valid_time(etime):
+                problems.append(f"entry {i}: invalid time")
+            entries.append((e["kind"], value, note, when.isoformat(), etime))
+        if problems:
+            raise HTTPException(400, "Nothing imported. " + "; ".join(problems[:6]) + (" …" if len(problems) > 6 else ""))
+        have_profile = db.profile()
+        applied = {k: v for k, v in prof.items() if v and (overwrite or not have_profile.get(k))}
+        db.set_profile(applied)
+        seen = {(r["kind"], r["event_date"], r["value"].lower(), r["note"]) for r in db.list_status(5000)}
+        added = skipped = 0
+        for kind, value, note, when, etime in entries:
+            key = (kind, when, value.lower(), note)
+            if key in seen:
+                skipped += 1
+                continue
+            db.add_status(kind, value, note, when, etime)
+            seen.add(key)
+            added += 1
+        db.log_event("settings", True, f"Imported profile ({len(applied)} fields) and {added} log entries")
+        return {"profile_fields": len(applied), "profile_kept": len(prof) - len(applied), "log_added": added,
+                "log_skipped": skipped, "ignored": ignored}
 
     @app.delete("/api/status-log/{sid}", dependencies=[Depends(auth), Depends(csrf)])
     def delete_status(sid: int):

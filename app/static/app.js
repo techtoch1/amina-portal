@@ -273,6 +273,20 @@
     };
   }
 
+  if (page === 'mom' && $('mom-file')) {
+    $('mom-file').onchange = async (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      say($('mom-import-result'), true, 'Importing…');
+      const r = await fetch('/api/mom-import?overwrite=' + $('mom-overwrite').checked, {method: 'POST', credentials: 'same-origin',
+        headers: {'X-CSRF-Token': csrf, 'Content-Type': 'application/json'}, body: await f.text()});
+      let data = {}; try { data = await r.json(); } catch (err) { data = {detail: 'Unexpected response'}; }
+      if (!r.ok) return say($('mom-import-result'), false, data.detail || data.error);
+      toastNext('Imported: ' + data.profile_fields + ' profile field(s), ' + data.log_added + ' log entr' + (data.log_added === 1 ? 'y' : 'ies') +
+        (data.log_skipped ? ', ' + data.log_skipped + ' already there' : '') + '.');
+      location.reload();
+    };
+  }
+
   // ================= Settings =================
   if (page === 'settings') {
     const cf = $('conf-form');

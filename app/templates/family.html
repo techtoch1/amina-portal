@@ -13,7 +13,7 @@
 </div>
 
 <div class="family" dir="{{ L.dir }}" lang="{{ lang }}">
-  {% if profile.get('allergies') or profile.get('conditions') or profile.get('doctor') or profile.get('emergency_contact') or profile.get('pharmacy') %}
+  {% if profile.get('allergies') or profile.get('conditions') or profile.get('doctor') or profile.get('emergency_contact') or profile.get('pharmacy') or profile.get('care_team') %}
   <section class="card big">
     <h2>{{ 'معلومات مهمة' if lang == 'ar' else 'Important information' }}</h2>
     <dl class="facts">
@@ -21,6 +21,7 @@
       {% if profile.get('conditions') %}<div><dt>{{ 'الحالة' if lang == 'ar' else 'Conditions' }}</dt><dd dir="auto">{{ profile.conditions }}</dd></div>{% endif %}
       {% if profile.get('doctor') %}<div><dt>{{ L.prescriber }}</dt><dd dir="auto">{{ profile.doctor }}{% if profile.get('doctor_phone') %} · <a href="tel:{{ profile.doctor_phone|replace(' ', '') }}" dir="ltr">{{ profile.doctor_phone }}</a>{% endif %}</dd></div>{% endif %}
       {% if profile.get('emergency_contact') %}<div><dt>{{ 'للطوارئ' if lang == 'ar' else 'Emergency contact' }}</dt><dd dir="auto">{{ profile.emergency_contact }}</dd></div>{% endif %}
+      {% if profile.get('care_team') %}<div><dt>{{ 'فريق الرعاية' if lang == 'ar' else 'Care team' }}</dt><dd class="pre" dir="auto">{{ profile.care_team }}</dd></div>{% endif %}
       {% if profile.get('pharmacy') %}<div><dt>{{ 'الصيدلية' if lang == 'ar' else 'Pharmacy' }}</dt><dd dir="auto">{{ profile.pharmacy }}</dd></div>{% endif %}
     </dl>
   </section>

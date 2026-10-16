@@ -189,3 +189,5 @@ body.login{display:grid;place-items:center;min-height:100vh;padding:20px}
 
 .testrow{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 .test-btn.mom{border-color:var(--brand);color:var(--brand-d)}
+
+.pre{white-space:pre-line}

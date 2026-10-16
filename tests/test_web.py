@@ -547,3 +547,45 @@ def test_family_can_read_mom_log_but_not_change_it(settings):
     assert c.get("/family/log").status_code == 200
     c.delete("/api/family-access", headers=h)
     assert TestClient(c.app, base_url="http://testserver").post("/login", data={"password": "family-pass-123"}).status_code == 401
+
+
+def test_mom_profile_and_log_import_export(settings):
+    import json as _json
+    c = make(settings)
+    h = login(c, settings)
+    c.put("/api/profile", json={"name": "Existing Name"}, headers=h)
+    payload = {"profile": {"name": "Amina", "doctor": "Prof. Kamar", "care_team": "Dr A — surgeon\nDr B — GP", "bogus": "x"},
+               "log": [{"kind": "Treatment", "date": "2025-07-01", "value": "Chemo started", "note": "approx. date"},
+                       {"kind": "Hospital", "date": "2026-02-10", "value": "Admission", "note": "Ascites and pain"},
+                       {"kind": "Note", "note": "No date -> today"}]}
+    post = lambda body, **q: c.post("/api/mom-import", content=_json.dumps(body), headers={**h, "Content-Type": "application/json"}, params=q)  # noqa: E731
+    r = post(payload)
+    assert r.status_code == 200
+    assert r.json() == {"profile_fields": 2, "profile_kept": 1, "log_added": 3, "log_skipped": 0, "ignored": ["bogus"]}
+    prof = c.get("/api/mom-export").json()["profile"]
+    assert prof["name"] == "Existing Name"  # existing text is kept
+    assert prof["doctor"] == "Prof. Kamar" and prof["care_team"].startswith("Dr A")
+    assert post(payload).json()["log_added"] == 0 and post(payload).json()["log_skipped"] == 3  # no duplicates
+    assert post(payload, overwrite="true").json()["profile_fields"] == 3
+    assert c.get("/api/mom-export").json()["profile"]["name"] == "Amina"
+    # all-or-nothing validation
+    bad = {"log": [{"kind": "Note", "note": "fine"}, {"kind": "Nope", "note": "x"}, {"kind": "Note", "note": "y", "date": "2026-02-31"},
+                   {"kind": "Note", "value": "v" * 81}]}
+    r = post(bad)
+    assert r.status_code == 400 and "Nothing imported" in r.json()["detail"] and "entry 2" in r.json()["detail"]
+    assert len(c.get("/api/mom-export").json()["log"]) == 3
+    assert c.post("/api/mom-import", content="not json", headers={**h, "Content-Type": "application/json"}).status_code == 400
+    assert c.post("/api/mom-import", content="[1]", headers={**h, "Content-Type": "application/json"}).status_code == 400
+    # shows up on the pages, including the family ones
+    c.put("/api/family-access", json={"password": "family-pass-123"}, headers=h)
+    mom = c.get("/mom").text
+    assert "Treatment" in mom and "Chemo started" in mom and "Dr B — GP" in mom and "Download backup" in mom
+    f = TestClient(c.app, base_url="http://testserver")
+    fh = login(f, settings, "family-pass-123")
+    fam = f.get("/family").text
+    assert "Care team" in fam and "Dr B — GP" in fam
+    assert "علاج" in f.get("/family/log?lang=ar").text and "Chemo started" in f.get("/family/log").text
+    # owner only, CSRF protected
+    assert f.get("/api/mom-export").status_code == 403
+    assert f.post("/api/mom-import", content="{}", headers={**fh, "Content-Type": "application/json"}).status_code == 403
+    assert c.post("/api/mom-import", content="{}", headers={"Content-Type": "application/json"}).status_code == 403

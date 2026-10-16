@@ -76,9 +76,21 @@
       <label>Emergency contact <input name="emergency_contact" value="{{ profile.get('emergency_contact','') }}" maxlength="200" dir="auto"></label>
       <label>Pharmacy <input name="pharmacy" value="{{ profile.get('pharmacy','') }}" maxlength="200" dir="auto"></label>
     </div>
+    <label>Care team &amp; support (doctors, contacts, home care, insurance) <textarea name="care_team" rows="6" maxlength="2000" dir="auto">{{ profile.get('care_team','') }}</textarea></label>
     <label>Note shown under the medicines table <textarea name="notes" rows="3" maxlength="2000" dir="auto">{{ profile.get('notes','') }}</textarea></label>
     <p id="profile-result" role="status"></p>
     <div><button class="btn primary" type="submit">Save profile</button></div>
   </form>
+</section>
+<section class="card">
+  <h2>Import / export</h2>
+  <p class="muted">Back up the profile and log to a file, or fill them in from a file. Import only <em>adds</em>: log entries already there are skipped, and profile fields that already have text are kept unless you tick overwrite.</p>
+  <div class="row">
+    <a class="btn" href="/api/mom-export" download>Download backup (JSON)</a>
+    <label class="btn" for="mom-file">Import from file</label>
+    <input id="mom-file" type="file" accept=".json,application/json" hidden>
+  </div>
+  <label class="check"><input type="checkbox" id="mom-overwrite"> <span>Overwrite profile fields that already have text</span></label>
+  <p id="mom-import-result" role="status"></p>
 </section>
 {% endblock %}
