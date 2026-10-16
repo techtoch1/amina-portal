@@ -199,14 +199,14 @@ def test_message_includes_arabic_purpose_only():
 
 def test_schedule_date_format_is_discovered_and_remembered(settings):
     class Fussy(WbizClient):
-        accepted = "%d-%m-%Y %H:%M"
-
         def __init__(self, s):
             super().__init__(s)
             self.values = []
+            self.bodies = []
 
         def _post(self, path, fields=None):
             self.values.append(fields["schedule_time"])
+            self.bodies.append(dict(fields))
             if fields["schedule_time"] != "29-10-2026 08:00":
                 raise WbizError("/schedule_msg/ failed (status=0): Scheduled date & time is not in valid format")
             return {"status": 1, "msg_id": "m1"}
@@ -217,6 +217,9 @@ def test_schedule_date_format_is_discovered_and_remembered(settings):
     assert c.schedule_message("96170000001", "x", "2026-10-29 08:00", "Asia/Beirut", "n") == "m1"
     assert c.values[:3] == ["2026-10-29 08:00:00", "2026-10-29T08:00:00", "2026-10-29T08:00"] and c.values[-1] == "29-10-2026 08:00"
     assert saved == ["%d-%m-%Y %H:%M"] and settings.schedule_format == "%d-%m-%Y %H:%M"
+    # an empty/unknown date field looks like "invalid format", so the date goes out under every likely field name
+    body = c.bodies[-1]
+    assert body["schedule_time"] == body["scheduled_time"] == body["scheduled_at"] == body["datetime"] == "29-10-2026 08:00"
     c.values.clear()
     c.schedule_message("96170000001", "x", "2026-10-29 08:00", "Asia/Beirut", "n")
     assert c.values == ["29-10-2026 08:00"]  # the remembered format goes first: one call, no retries
@@ -246,7 +249,11 @@ def test_schedule_date_format_is_discovered_and_remembered(settings):
         Never(settings).schedule_message("1", "x", "2026-10-29 08:00", "Asia/Beirut")
         assert False
     except WbizError as e:
-        assert "tried 9 date formats" in str(e)
+        from app.wbiztool import SCHEDULE_FORMATS
+        assert f"tried {len(SCHEDULE_FORMATS)} date formats" in str(e)
     from datetime import datetime as _dt
+    assert WbizClient(settings)._format_schedule("2026-10-29 08:00", "iso_tz", "Asia/Beirut") == "2026-10-29T08:00:00+02:00"
+    assert WbizClient(settings)._format_schedule("2026-10-29 08:00", "%Y-%m-%d %I:%M %p", "Asia/Beirut") == "2026-10-29 08:00 AM"
+    assert WbizClient(settings)._format_schedule("2026-10-29 08:00", "epoch_ms", "Asia/Beirut").endswith("000")
     assert WbizClient(settings)._format_schedule("2026-10-29 08:00", "epoch", "Asia/Beirut") == str(
         int(_dt(2026, 10, 29, 6, 0, tzinfo=__import__("datetime").timezone.utc).timestamp()))  # Beirut is UTC+2 after DST ends (25 Oct)

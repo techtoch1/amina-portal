@@ -53,12 +53,18 @@ ALIASES = {
     "message": ("template", "msg", "message"),
     "cron": ("cron_expression", "schedule"),
     "timezone": ("time_zone", "tz"),
+    # "Scheduled date & time is not in valid format" is also what an EMPTY date gives, i.e. the field name
+    # may simply be wrong. Send the date under all the likely names.
+    "schedule_time": ("scheduled_time", "scheduled_at", "schedule_at", "scheduled_date_time", "schedule_date_time",
+                      "scheduled_datetime", "schedule_datetime", "datetime", "date_time", "send_at", "send_time",
+                      "scheduled_date", "schedule_date"),
 }
 # Wbiztool answered "Scheduled date & time is not in valid format" for "2026-10-29 08:00", but never says
 # which format it wants. A rejected date creates nothing, so the formats are tried in turn until one is
 # accepted; the winner is remembered. "epoch" = Unix seconds for the local time.
 SCHEDULE_FORMATS = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%d-%m-%Y %H:%M", "%d/%m/%Y %H:%M",
-                    "%Y-%m-%d %H:%M", "%d-%m-%Y %H:%M:%S", "%m/%d/%Y %H:%M", "epoch"]
+                    "%Y-%m-%d %H:%M", "%d-%m-%Y %H:%M:%S", "%m/%d/%Y %H:%M", "%Y-%m-%d %I:%M %p", "%d-%m-%Y %I:%M %p",
+                    "iso_tz", "epoch", "epoch_ms"]
 # keys searched (recursively) in a response to find the id of a created item
 ID_KEYS = ("reminder_id", "msg_id", "message_id", "id")
 
@@ -183,8 +189,13 @@ class WbizClient:
 
     def _format_schedule(self, fire_at, fmt, tz):
         when = datetime.strptime(fire_at, "%Y-%m-%d %H:%M")
+        local = when.replace(tzinfo=ZoneInfo(tz))
         if fmt == "epoch":
-            return str(int(when.replace(tzinfo=ZoneInfo(tz)).timestamp()))
+            return str(int(local.timestamp()))
+        if fmt == "epoch_ms":
+            return str(int(local.timestamp()) * 1000)
+        if fmt == "iso_tz":
+            return local.isoformat(timespec="seconds")  # 2026-10-29T08:00:00+02:00
         return when.strftime(fmt)
 
     def schedule_message(self, phone, message, fire_at, tz, name=""):
