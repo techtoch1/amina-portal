@@ -254,35 +254,141 @@ def parse_row(row_no, rec):
     )
 
 
-def load_medicines(path):
-    path = Path(path)
-    result = ParseResult()
-    if not path.exists():
-        result.errors.append(f"Excel file not found: {path.name} (put it in the data folder)")
-        return result
-    result.mtime = path.stat().st_mtime
+FIELDS = ["name", "dose", "times", "frequency", "day", "start_date", "last_date", "instruction", "purpose"]
+
+
+def cell_text(v):
+    """Excel cell -> the plain string stored in the database."""
+    if v is None:
+        return ""
+    if isinstance(v, datetime):
+        return v.strftime("%H:%M") if v.year <= 1900 else v.date().isoformat()
+    if isinstance(v, date):
+        return v.isoformat()
+    if isinstance(v, time):
+        return _fmt(v.hour, v.minute)
+    if isinstance(v, float):
+        if 0 < v < 1:  # Excel day fraction
+            minutes = round(v * 24 * 60)
+            return _fmt(minutes // 60 % 24, minutes % 60)
+        if v.is_integer():
+            v = int(v)
+    return str(v).strip()
+
+
+def read_sheet(source):
+    """Read the first sheet. source: a path or a file-like object.
+    Returns ([(row_number, rec_of_strings)], [errors])."""
     try:
-        wb = load_workbook(path, data_only=True, read_only=True)
+        wb = load_workbook(source, data_only=True, read_only=True)
     except Exception as exc:  # corrupt / not xlsx / locked
-        result.errors.append(f"Could not open {path.name}: {type(exc).__name__}")
-        return result
+        return [], [f"Could not open the Excel file ({type(exc).__name__}). Is it a .xlsx file?"]
     try:
-        ws = wb.worksheets[0]
-        rows = list(ws.iter_rows(values_only=True))
+        rows = list(wb.worksheets[0].iter_rows(values_only=True))
     finally:
         wb.close()
     if not rows:
-        result.errors.append("The Excel sheet is empty")
-        return result
+        return [], ["The Excel sheet is empty"]
     cols = _column_map(rows[0])
     missing = [c for c in ("name", "times", "frequency") if c not in cols]
     if missing:
-        result.errors.append("Missing required column(s) in the header row: " + ", ".join(missing))
-        return result
+        return [], ["Missing required column(s) in the header row: " + ", ".join(missing)]
+    out = []
     for offset, cells in enumerate(rows[1:], start=2):
-        rec = {c: (cells[i] if i < len(cells) else None) for c, i in cols.items()}
-        if all(v in (None, "") or (isinstance(v, str) and not v.strip()) for v in rec.values()):
-            continue
-        item = parse_row(offset, rec)
+        rec = {c: cell_text(cells[i] if i < len(cells) else None) for c, i in cols.items()}
+        if any(rec.values()):
+            out.append((offset, {f: rec.get(f, "") for f in FIELDS}))
+    return out, []
+
+
+def load_medicines(path):
+    """Parse a spreadsheet straight into medicines + review rows (used by tests/CLI)."""
+    path = Path(path)
+    result = ParseResult()
+    if not path.exists():
+        result.errors.append(f"Excel file not found: {path.name}")
+        return result
+    rows, result.errors = read_sheet(path)
+    for row_no, rec in rows:
+        item = parse_row(row_no, rec)
         (result.medicines if isinstance(item, Medicine) else result.review).append(item)
     return result
+
+
+def load_from_db(db):
+    """Medicines stored in the app database -> (ParseResult, stopped rows)."""
+    result, stopped = ParseResult(), []
+    for r in db.list_medicines():
+        if not r["active"]:
+            stopped.append(r)
+            continue
+        item = parse_row(r["id"], {f: r[f] for f in FIELDS})
+        (result.medicines if isinstance(item, Medicine) else result.review).append(item)
+    return result, stopped
+
+
+# ---------- form <-> stored record ----------
+
+DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+_HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def form_to_rec(data):
+    """Validate the add/edit form. Returns (rec, error|None)."""
+    def s(key, limit):
+        return str(data.get(key) or "").strip()[:limit]
+
+    name = s("name", 120)
+    if not name:
+        return None, "Medicine name is required"
+    freq = s("frequency", 20)
+    if freq not in ("daily", "weekly", "every_n", "as_needed"):
+        return None, "Choose how often the medicine is taken"
+    times = []
+    if freq != "as_needed":
+        for t in data.get("times") or []:
+            if not isinstance(t, str) or not _HHMM.match(t):
+                return None, f"'{t}' is not a valid time"
+            times.append(t)
+        if not times:
+            return None, "Add at least one time"
+        times = sorted(set(times))
+    rec = {"name": name, "dose": s("dose", 80), "times": ", ".join(times), "frequency": "", "day": "",
+           "start_date": "", "last_date": "", "instruction": s("instruction", 300), "purpose": s("purpose", 200)}
+    if freq == "daily":
+        rec["frequency"] = "daily"
+    elif freq == "as_needed":
+        rec["frequency"] = "as needed"
+    elif freq == "weekly":
+        days = sorted({d for d in (data.get("weekdays") or []) if isinstance(d, int) and 0 <= d <= 6})
+        if not days:
+            return None, "Choose at least one day of the week"
+        rec["frequency"], rec["day"] = "weekly", ", ".join(DAY_NAMES[d] for d in days)
+    else:
+        try:
+            n = int(data.get("every_n"))
+        except (TypeError, ValueError):
+            return None, "Enter how many days between doses"
+        if not 1 <= n <= 365:
+            return None, "Days between doses must be 1-365"
+        try:
+            d = date.fromisoformat(str(data.get("date") or ""))
+        except ValueError:
+            return None, "Choose the date of the next (or last) dose"
+        rec["frequency"] = f"every {n} days"
+        rec["last_date" if data.get("date_kind") == "last" else "start_date"] = d.isoformat()
+    return rec, None
+
+
+def rec_to_form(rec):
+    """Stored record -> values for the edit form (best effort for imported rows)."""
+    kind, n, _ = classify_frequency(norm(rec.get("frequency")))
+    times, _p = parse_times(rec.get("times") or None)
+    return {
+        "name": rec.get("name", ""), "dose": rec.get("dose", ""), "times": times,
+        "frequency": kind or "", "every_n": n or "",
+        "weekdays": find_weekdays(norm(rec.get("day"))) or (find_weekdays(norm(rec.get("frequency"))) if kind == "weekly" else []),
+        "date": rec.get("start_date") or rec.get("last_date") or "",
+        "date_kind": "last" if (rec.get("last_date") and not rec.get("start_date")) else "start",
+        "instruction": rec.get("instruction", ""), "purpose": rec.get("purpose", ""),
+    }

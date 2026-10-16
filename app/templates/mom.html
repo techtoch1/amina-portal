@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block body %}
+<section class="card">
+  <h2>Log her status</h2>
+  <form id="status-form" class="stack">
+    <label>What
+      <select name="kind">{% for k in kinds %}<option>{{ k }}</option>{% endfor %}</select></label>
+    <label>Value <input name="value" maxlength="80" placeholder="e.g. 130/80, 112 mg/dL, 37.2" dir="auto"></label>
+    <label>Note <input name="note" maxlength="500" dir="auto"></label>
+    <p id="status-error" class="err" role="alert"></p>
+    <button class="btn primary" type="submit">Add to log</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>History</h2>
+  {% if log %}
+  <ul class="plain log">
+    {% for row in log %}
+    <li><strong>{{ row.kind }}</strong> · <span dir="auto">{{ row.value }}{% if row.note %} — {{ row.note }}{% endif %}</span>
+      <span class="muted">{{ row.ts|local }}</span>
+      <button class="link danger" data-del-status="{{ row.id }}" aria-label="Delete entry">delete</button></li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="muted">Nothing logged yet.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Profile</h2>
+  <form id="profile-form" class="stack">
+    <label>Name <input name="name" value="{{ profile.get('name','') }}" maxlength="120" dir="auto"></label>
+    <label>Age / date of birth <input name="age" value="{{ profile.get('age','') }}" maxlength="40"></label>
+    <label>Conditions <textarea name="conditions" rows="2" maxlength="1000" dir="auto">{{ profile.get('conditions','') }}</textarea></label>
+    <label>Allergies <textarea name="allergies" rows="2" maxlength="1000" dir="auto">{{ profile.get('allergies','') }}</textarea></label>
+    <label>Doctor <input name="doctor" value="{{ profile.get('doctor','') }}" maxlength="120" dir="auto"></label>
+    <label>Doctor phone <input name="doctor_phone" value="{{ profile.get('doctor_phone','') }}" maxlength="40" inputmode="tel"></label>
+    <label>Emergency contact <input name="emergency_contact" value="{{ profile.get('emergency_contact','') }}" maxlength="200" dir="auto"></label>
+    <label>Pharmacy <input name="pharmacy" value="{{ profile.get('pharmacy','') }}" maxlength="200" dir="auto"></label>
+    <label>Notes <textarea name="notes" rows="4" maxlength="2000" dir="auto">{{ profile.get('notes','') }}</textarea></label>
+    <p id="profile-result" role="status"></p>
+    <button class="btn primary" type="submit">Save profile</button>
+  </form>
+</section>
+{% endblock %}

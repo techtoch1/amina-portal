@@ -68,7 +68,7 @@ ask DASHBOARD_PASSWORD "Dashboard password (10+ characters)" secret
 [[ "$(env_get DASHBOARD_PASSWORD | wc -c)" -ge 11 ]] || fail "DASHBOARD_PASSWORD must be at least 10 characters"
 [[ -n "$(env_get WBIZ_DOCS_VERIFIED)" ]] || env_set WBIZ_DOCS_VERIFIED false
 env_set HOST 127.0.0.1; env_set PORT "$PORT"; env_set COOKIE_SECURE true
-env_set DATA_DIR "$DATA"; env_set EXCEL_PATH "$DATA/medicines.xlsx"; env_set TIMEZONE Asia/Beirut
+env_set DATA_DIR "$DATA"; env_set TIMEZONE Asia/Beirut
 [[ -n "$(env_get SEND_COPY_TO_ME)" ]] || env_set SEND_COPY_TO_ME true
 
 say "Service"
@@ -120,12 +120,15 @@ command -v certbot >/dev/null || apt-get install -y -qq certbot python3-certbot-
 certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos --redirect -m "${CERTBOT_EMAIL:-admin@aligned-tech.com}" \
   || fail "certbot failed. Does the DNS record for $DOMAIN point at this server?"
 
+say "Testing the Wbiztool credentials (/me/)"
+( cd "$APP" && sudo -u amina env ENV_FILE="$ENVF" "$APP/.venv/bin/python" -m app.cli check ) \
+  || echo "(!) Wbiztool rejected the settings above. Fix with:  sudo bash $SRC/deploy/set-secret.sh   (re-enter the API key)"
+
 say "Done: https://$DOMAIN"
 cat <<MSG
 Next:
-  1. Copy the Excel file:  sudo install -m 640 -o amina -g amina medicines.xlsx $DATA/medicines.xlsx
-  2. Verify the Wbiztool paths in $APP/app/wbiztool.py against the docs, then
+  1. Sign in at https://$DOMAIN and add Mom's medicines in the Medicines tab (or import your Excel file there).
+  2. Check the Wbiztool endpoint paths in $APP/app/wbiztool.py against https://wbiztool.com/docs/, then
      sudo sed -i 's/^WBIZ_DOCS_VERIFIED=.*/WBIZ_DOCS_VERIFIED=true/' $ENVF && sudo systemctl restart amina
-  3. Test credentials:  sudo -u amina env \$(sudo cat $ENVF | xargs) $APP/.venv/bin/python -m app.cli me
-  4. Open the site, Preview changes, read the list, approve.
+  3. Reminders tab: Preview changes, read the list, approve.
 MSG

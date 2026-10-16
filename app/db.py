@@ -26,6 +26,18 @@ CREATE TABLE IF NOT EXISTS events (
   ok INTEGER NOT NULL,
   detail TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS medicines (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL DEFAULT '', dose TEXT NOT NULL DEFAULT '', times TEXT NOT NULL DEFAULT '',
+  frequency TEXT NOT NULL DEFAULT '', day TEXT NOT NULL DEFAULT '',
+  start_date TEXT NOT NULL DEFAULT '', last_date TEXT NOT NULL DEFAULT '',
+  instruction TEXT NOT NULL DEFAULT '', purpose TEXT NOT NULL DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS status_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
@@ -89,3 +101,58 @@ class DB:
     def has_history(self, group_key):
         with self.conn() as c:
             return c.execute("SELECT 1 FROM reminders WHERE group_key=? LIMIT 1", (group_key,)).fetchone() is not None
+
+    # ---- medicines ----
+    MED_FIELDS = ("name", "dose", "times", "frequency", "day", "start_date", "last_date", "instruction", "purpose")
+
+    def list_medicines(self):
+        with self.conn() as c:
+            return [dict(r) for r in c.execute("SELECT * FROM medicines ORDER BY lower(name), id")]
+
+    def get_medicine(self, mid):
+        with self.conn() as c:
+            row = c.execute("SELECT * FROM medicines WHERE id=?", (mid,)).fetchone()
+        return dict(row) if row else None
+
+    def add_medicine(self, rec, active=True):
+        with self.conn() as c:
+            cur = c.execute(
+                "INSERT INTO medicines(name,dose,times,frequency,day,start_date,last_date,instruction,purpose,active,created_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (*[rec.get(f, "") for f in self.MED_FIELDS], int(active), now_iso()))
+            return cur.lastrowid
+
+    def update_medicine(self, mid, rec):
+        sets = ",".join(f"{f}=?" for f in self.MED_FIELDS)
+        with self.conn() as c:
+            return c.execute(f"UPDATE medicines SET {sets} WHERE id=?",
+                             (*[rec.get(f, "") for f in self.MED_FIELDS], mid)).rowcount > 0
+
+    def set_medicine_active(self, mid, active):
+        with self.conn() as c:
+            return c.execute("UPDATE medicines SET active=? WHERE id=?", (int(active), mid)).rowcount > 0
+
+    def delete_medicine(self, mid):
+        with self.conn() as c:
+            return c.execute("DELETE FROM medicines WHERE id=?", (mid,)).rowcount > 0
+
+    # ---- mom's profile (key/value) and status log ----
+    def profile(self):
+        with self.conn() as c:
+            return {r["key"][8:]: r["value"] for r in c.execute("SELECT * FROM settings WHERE key LIKE 'profile.%'")}
+
+    def set_profile(self, values):
+        for k, v in values.items():
+            self.set_setting("profile." + k, v)
+
+    def add_status(self, kind, value, note):
+        with self.conn() as c:
+            c.execute("INSERT INTO status_log(ts,kind,value,note) VALUES(?,?,?,?)", (now_iso(), kind, value, note))
+
+    def list_status(self, limit=60):
+        with self.conn() as c:
+            return [dict(r) for r in c.execute("SELECT * FROM status_log ORDER BY id DESC LIMIT ?", (limit,))]
+
+    def delete_status(self, sid):
+        with self.conn() as c:
+            return c.execute("DELETE FROM status_log WHERE id=?", (sid,)).rowcount > 0

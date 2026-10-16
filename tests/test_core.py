@@ -1,7 +1,7 @@
 from datetime import date, datetime
 
 from app.db import DB
-from app.excel import load_medicines, parse_times
+from app.excel import form_to_rec, load_medicines, parse_times, rec_to_form
 from app.schedule import build_desired, next_occurrence, today_agenda
 from app.sync import apply_plan, compute_plan, rollover
 from app.wbiztool import WbizClient, WbizError
@@ -137,3 +137,11 @@ def test_response_handling(settings):
     sess = Sess(Resp("", 200, {"status": 1}))
     WbizClient(settings, sess).me()
     assert isinstance(sess.body["client_id"], int) and isinstance(sess.body["api_key"], str)
+
+
+def test_form_roundtrip():
+    rec, err = form_to_rec({"name": "X", "frequency": "every_n", "every_n": 28, "date": "2026-10-20",
+                            "date_kind": "last", "times": ["10:00"]})
+    assert err is None and rec["last_date"] == "2026-10-20" and rec["start_date"] == ""
+    back = rec_to_form(rec)
+    assert back["frequency"] == "every_n" and back["every_n"] == 28 and back["date_kind"] == "last"

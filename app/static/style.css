@@ -27,3 +27,32 @@ ul.plain li{padding:.25rem 0}
 .btn.small{min-height:36px}.btn:disabled{opacity:.5;cursor:not-allowed}
 input[type=password]{width:100%;min-height:44px;padding:0 12px;margin:6px 0 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg);font:inherit}
 @media (max-width:480px){.btn{width:100%}.top .btn{width:auto}}
+/* navigation, forms, dialog */
+.tabs{display:flex;gap:4px;max-width:760px;margin:0 auto;padding:0 16px;overflow-x:auto}
+.tabs a{flex:1;text-align:center;padding:10px 8px;border-bottom:3px solid transparent;color:var(--muted);text-decoration:none;white-space:nowrap;font-weight:600}
+.tabs a[aria-current=page]{color:var(--fg);border-color:var(--accent)}
+.badge{display:inline-block;min-width:1.3em;padding:0 6px;border-radius:99px;background:var(--bad);color:#fff;font-size:.75rem;line-height:1.4em}
+.chip{display:inline-block;padding:0 8px;border-radius:99px;border:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+.chip.bad{border-color:var(--bad);color:var(--bad)}
+.card.info{background:var(--card);border-color:var(--accent)}
+.linkcard{display:block;color:inherit;text-decoration:none}
+a{color:var(--accent)}
+label{display:block;font-size:.9rem;color:var(--muted);margin:.6rem 0 0}
+label.check{display:flex;color:var(--fg);margin:.4rem 0}
+input,select,textarea{display:block;width:100%;min-height:44px;margin-top:4px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg);font:inherit}
+input[type=checkbox]{width:auto;min-height:0;margin:0}
+input.short{display:inline-block;width:5rem}
+fieldset{border:1px solid var(--line);border-radius:10px;margin:.8rem 0;padding:8px 12px}
+legend{font-size:.85rem;color:var(--muted);padding:0 4px}
+.days{display:flex;flex-wrap:wrap;gap:4px 14px}
+.timerow{display:flex;gap:8px;margin-bottom:6px}.timerow .btn{width:auto}
+.med-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.med-card.stopped{opacity:.6}.problems{color:var(--bad);margin:.3rem 0}
+.btn.danger,.link.danger{color:var(--bad)}
+.link{background:none;border:0;font:inherit;cursor:pointer;padding:0 4px;text-decoration:underline}
+dialog{width:min(92vw,520px);max-height:92vh;overflow:auto;border:1px solid var(--line);border-radius:14px;background:var(--card);color:var(--fg);padding:16px}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+.stack input,.stack select,.stack textarea{margin-bottom:2px}
+.msg{white-space:pre-wrap;text-align:right;unicode-bidi:plaintext;font:inherit}
+details{padding:6px 0;border-top:1px solid var(--line)}summary{cursor:pointer}
+code{font-size:.85em}

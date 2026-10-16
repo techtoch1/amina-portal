@@ -4,10 +4,10 @@ import logging
 import secrets
 import threading
 import time as _time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -15,13 +15,20 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .config import Settings
 from .db import DB
-from .excel import load_medicines
-from .schedule import next_injections, today_agenda
+from io import BytesIO
+from zoneinfo import ZoneInfo
+
+from .excel import form_to_rec, load_from_db, read_sheet, rec_to_form
+from .schedule import describe, next_injections, today_agenda
 from .sync import apply_plan, compute_plan, copy_enabled, local_now, plan_to_json, rollover
 from .wbiztool import WbizClient, WbizError
 
 HERE = Path(__file__).parent
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+PROFILE_FIELDS = {"name": 120, "age": 40, "conditions": 1000, "allergies": 1000, "doctor": 120, "doctor_phone": 40,
+                  "emergency_contact": 200, "pharmacy": 200, "notes": 2000}
+STATUS_KINDS = ["Blood pressure", "Blood sugar", "Weight", "Temperature", "Mood / condition", "Doctor visit", "Note"]
+MAX_UPLOAD = 2 * 1024 * 1024
 
 
 class _Redact(logging.Filter):
@@ -81,11 +88,27 @@ def create_app(settings=None, client=None):
             raise HTTPException(403, "Bad CSRF token")
 
     def medicines():
-        path = settings.excel_path
-        key = (path.stat().st_mtime if path.exists() else None)
-        if cache["xl"] is None or cache["xl_key"] != key:
-            cache["xl"], cache["xl_key"] = load_medicines(path), key
-        return cache["xl"]
+        return load_from_db(db)[0]
+
+    def local_str(iso):
+        try:
+            dt = datetime.fromisoformat(iso).replace(tzinfo=timezone.utc).astimezone(ZoneInfo(settings.timezone))
+            return dt.strftime("%d %b %H:%M")
+        except ValueError:
+            return iso
+
+    templates.env.filters["local"] = local_str
+
+    def page(request, name, **extra):
+        res, stopped = load_from_db(db)
+        now = local_now(settings)
+        plan = compute_plan(settings, db, res.medicines, now)
+        base = {"csrf": request.session.get("csrf", ""), "now": now, "active_page": name, "profile": db.profile(),
+                "pending": len(plan["create"]) + len(plan["cancel"]), "review_count": len(res.review),
+                "configured": settings.wbiz_configured, "verified": settings.docs_verified,
+                "res": res, "stopped": stopped}
+        base.update(extra)
+        return templates.TemplateResponse(request, name + ".html", base)
 
     # ---- login ----
     @app.get("/login", response_class=HTMLResponse)
@@ -113,24 +136,40 @@ def create_app(settings=None, client=None):
         request.session.clear()
         return JSONResponse({"ok": True})
 
-    # ---- dashboard ----
+    # ---- pages ----
     @app.get("/", response_class=HTMLResponse, dependencies=[Depends(auth)])
-    def dashboard(request: Request):
+    def today(request: Request):
         res = medicines()
         now = local_now(settings)
         agenda = today_agenda(res.medicines, now.date())
-        as_needed = [m for m in res.medicines if m.kind == "as_needed"]
-        ctx = {
-            "csrf": request.session.get("csrf", ""),
-            "now": now, "today_label": now.strftime("%A, %d %B %Y"),
-            "agenda": [(t, m, t < now.strftime("%H:%M")) for t, m in agenda],
-            "injections": next_injections(res.medicines, now),
-            "as_needed": as_needed, "review": res.review, "errors": res.errors,
-            "total": len(res.medicines), "copy": copy_enabled(settings, db),
-            "configured": settings.wbiz_configured, "verified": settings.docs_verified,
-            "events": db.recent_events(8), "day_names": DAY_NAMES,
-        }
-        return templates.TemplateResponse(request, "dashboard.html", ctx)
+        latest = {}
+        for row in db.list_status(60):
+            latest.setdefault(row["kind"], row)
+        return page(request, "today", today_label=now.strftime("%A, %d %B %Y"),
+                    agenda=[(t, m, t < now.strftime("%H:%M")) for t, m in agenda],
+                    injections=next_injections(res.medicines, now),
+                    as_needed=[m for m in res.medicines if m.kind == "as_needed"], latest=latest)
+
+    @app.get("/medicines", response_class=HTMLResponse, dependencies=[Depends(auth)])
+    def medicines_page(request: Request):
+        res, stopped = load_from_db(db)
+        by_id = {m.row: m for m in res.medicines}
+        review = {r.row: r for r in res.review}
+        rows = []
+        for r in db.list_medicines():
+            m, rv = by_id.get(r["id"]), review.get(r["id"])
+            rows.append({"r": r, "desc": describe(m) if m else "", "problems": rv.reasons if rv else [],
+                         "stopped": not r["active"]})
+        return page(request, "medicines", rows=rows, day_names=DAY_NAMES)
+
+    @app.get("/mom", response_class=HTMLResponse, dependencies=[Depends(auth)])
+    def mom_page(request: Request):
+        return page(request, "mom", kinds=STATUS_KINDS, log=db.list_status(60), fields=list(PROFILE_FIELDS))
+
+    @app.get("/reminders", response_class=HTMLResponse, dependencies=[Depends(auth)])
+    def reminders_page(request: Request):
+        return page(request, "reminders", copy=copy_enabled(settings, db), events=db.recent_events(10),
+                    active_reminders=db.active())
 
     # ---- API ----
     @app.get("/api/status", dependencies=[Depends(auth)])
@@ -191,6 +230,90 @@ def create_app(settings=None, client=None):
     async def set_settings(request: Request):
         body = await request.json()
         db.set_setting("copy_to_me", "1" if body.get("copy_to_me") else "0")
+        return {"ok": True}
+
+    # ---- medicines API ----
+    def _med_or_404(mid):
+        row = db.get_medicine(mid)
+        if not row:
+            raise HTTPException(404, "Medicine not found")
+        return row
+
+    @app.get("/api/medicines/{mid}", dependencies=[Depends(auth)])
+    def get_medicine(mid: int):
+        return rec_to_form(_med_or_404(mid))
+
+    @app.post("/api/medicines", dependencies=[Depends(auth), Depends(csrf)])
+    async def add_medicine(request: Request):
+        rec, err = form_to_rec(await request.json())
+        if err:
+            raise HTTPException(400, err)
+        return {"id": db.add_medicine(rec)}
+
+    @app.put("/api/medicines/{mid}", dependencies=[Depends(auth), Depends(csrf)])
+    async def edit_medicine(mid: int, request: Request):
+        _med_or_404(mid)
+        rec, err = form_to_rec(await request.json())
+        if err:
+            raise HTTPException(400, err)
+        db.update_medicine(mid, rec)
+        return {"ok": True}
+
+    @app.post("/api/medicines/{mid}/active", dependencies=[Depends(auth), Depends(csrf)])
+    async def medicine_active(mid: int, request: Request):
+        _med_or_404(mid)
+        db.set_medicine_active(mid, bool((await request.json()).get("active")))
+        return {"ok": True}
+
+    @app.delete("/api/medicines/{mid}", dependencies=[Depends(auth), Depends(csrf)])
+    def delete_medicine(mid: int):
+        _med_or_404(mid)
+        db.delete_medicine(mid)
+        return {"ok": True}
+
+    @app.post("/api/medicines-import", dependencies=[Depends(auth), Depends(csrf)])
+    def import_medicines(file: UploadFile = File(...)):
+        raw = file.file.read(MAX_UPLOAD + 1)
+        if len(raw) > MAX_UPLOAD:
+            raise HTTPException(413, "File is too large (2 MB max)")
+        rows, errors = read_sheet(BytesIO(raw))
+        if errors:
+            raise HTTPException(400, "; ".join(errors))
+        have = {(m["name"].lower(), m["times"], m["frequency"].lower()) for m in db.list_medicines()}
+        added = skipped = 0
+        for _row, rec in rows:
+            key = (rec["name"].lower(), rec["times"], rec["frequency"].lower())
+            if key in have:
+                skipped += 1
+                continue
+            db.add_medicine({k: v[:300] for k, v in rec.items()})
+            have.add(key)
+            added += 1
+        return {"added": added, "skipped": skipped}
+
+    # ---- mom: profile and status log ----
+    @app.put("/api/profile", dependencies=[Depends(auth), Depends(csrf)])
+    async def save_profile(request: Request):
+        body = await request.json()
+        db.set_profile({k: str(body.get(k) or "").strip()[:lim] for k, lim in PROFILE_FIELDS.items() if k in body})
+        return {"ok": True}
+
+    @app.post("/api/status-log", dependencies=[Depends(auth), Depends(csrf)])
+    async def add_status(request: Request):
+        body = await request.json()
+        kind = body.get("kind")
+        if kind not in STATUS_KINDS:
+            raise HTTPException(400, "Unknown kind")
+        value, note = str(body.get("value") or "").strip()[:80], str(body.get("note") or "").strip()[:500]
+        if not value and not note:
+            raise HTTPException(400, "Enter a value or a note")
+        db.add_status(kind, value, note)
+        return {"ok": True}
+
+    @app.delete("/api/status-log/{sid}", dependencies=[Depends(auth), Depends(csrf)])
+    def delete_status(sid: int):
+        if not db.delete_status(sid):
+            raise HTTPException(404, "Not found")
         return {"ok": True}
 
     # ---- background roll-over of one-off messages (e.g. every 28 days) ----

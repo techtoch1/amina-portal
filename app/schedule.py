@@ -131,3 +131,18 @@ def _only_time(med, t):
     c = copy(med)
     c.times = [t]
     return c
+
+
+_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def describe(med):
+    """One-line human description of a medicine's schedule."""
+    times = ", ".join(med.times)
+    if med.kind == "daily":
+        return f"Every day at {times}"
+    if med.kind == "weekly":
+        return f"Every {', '.join(_DAYS[d] for d in med.weekdays)} at {times}"
+    if med.kind == "every_n":
+        return f"Every {med.every_n} days at {times} (cycle includes {med.anchor.strftime('%d %b %Y')})"
+    return "As needed (no reminders)"

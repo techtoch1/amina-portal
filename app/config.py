@@ -15,6 +15,14 @@ def _bool(value, default):
     return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _clean(value):
+    """Trim whitespace and one pair of surrounding quotes (a common paste/EnvironmentFile mishap)."""
+    value = (value or "").strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1].strip()
+    return value
+
+
 def _digits(value):
     return "".join(ch for ch in (value or "") if ch.isdigit())
 
@@ -49,13 +57,13 @@ class Settings:
     @classmethod
     def from_env(cls, load_file=True):
         if load_file:
-            load_dotenv(BASE_DIR / ".env")
+            load_dotenv(os.environ.get("ENV_FILE") or BASE_DIR / ".env")
         e = os.environ.get
-        raw_id = (e("WBIZ_CLIENT_ID") or "").strip()
+        raw_id = _clean(e("WBIZ_CLIENT_ID"))
         s = cls(
             client_id=int(raw_id) if raw_id.isdigit() else None,
-            api_key=(e("WBIZ_API_KEY") or "").strip(),
-            whatsapp_client=(e("WBIZ_WHATSAPP_CLIENT") or "").strip(),
+            api_key=_clean(e("WBIZ_API_KEY")),
+            whatsapp_client=_clean(e("WBIZ_WHATSAPP_CLIENT")),
             mom_number=_digits(e("MOM_NUMBER")),
             my_number=_digits(e("MY_NUMBER")),
             dashboard_password=e("DASHBOARD_PASSWORD") or "",

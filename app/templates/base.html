@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf" content="{{ csrf }}">
+<title>{% block title %}Amina{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body data-page="{{ active_page }}">
+<header class="top">
+  <h1>{{ profile.get('name') or 'Medicine reminders' }}</h1>
+  <button class="btn small" id="logout">Sign out</button>
+</header>
+<nav class="tabs" aria-label="Sections">
+  <a href="/" {% if active_page == 'today' %}aria-current="page"{% endif %}>Today</a>
+  <a href="/medicines" {% if active_page == 'medicines' %}aria-current="page"{% endif %}>Medicines{% if review_count %} <span class="badge">{{ review_count }}</span>{% endif %}</a>
+  <a href="/mom" {% if active_page == 'mom' %}aria-current="page"{% endif %}>Mom</a>
+  <a href="/reminders" {% if active_page == 'reminders' %}aria-current="page"{% endif %}>Reminders{% if pending %} <span class="badge">{{ pending }}</span>{% endif %}</a>
+</nav>
+<main>
+{% block body %}{% endblock %}
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

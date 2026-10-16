@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block body %}
+{% if review_count %}
+<a class="card warn linkcard" href="/medicines"><strong>{{ review_count }} medicine{{ 's' if review_count != 1 }} need review</strong> — no reminder is created for them. Tap to fix.</a>
+{% endif %}
+{% if pending and configured %}
+<a class="card info linkcard" href="/reminders"><strong>{{ pending }} reminder change{{ 's' if pending != 1 }} not yet sent to Wbiztool.</strong> Tap to review and sync.</a>
+{% endif %}
+
+{% if profile.get('allergies') or profile.get('conditions') or latest %}
+<section class="card">
+  <h2>Mom's status</h2>
+  {% if profile.get('allergies') %}<p><span class="chip bad">Allergies</span> <span dir="auto">{{ profile.allergies }}</span></p>{% endif %}
+  {% if profile.get('conditions') %}<p><span class="chip">Conditions</span> <span dir="auto">{{ profile.conditions }}</span></p>{% endif %}
+  {% if latest %}
+  <ul class="plain">
+    {% for kind, row in latest.items() %}
+    <li><strong>{{ kind }}</strong> · <span dir="auto">{{ row.value }}{% if row.note %} — {{ row.note }}{% endif %}</span>
+      <span class="muted">{{ row.ts|local }}</span></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <a href="/mom">Update status →</a>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Today <span class="muted">{{ today_label }}</span></h2>
+  {% if agenda %}
+  <ul class="agenda">
+    {% for t, m, past in agenda %}
+    <li class="{{ 'past' if past else '' }}">
+      <span class="time">{{ t }}</span>
+      <div class="med">
+        <strong dir="auto">{{ m.name }}</strong>{% if m.dose %} <span class="dose" dir="auto">{{ m.dose }}</span>{% endif %}
+        {% if m.purpose %}<div class="purpose" dir="auto">{{ m.purpose }}</div>{% endif %}
+        {% if m.instruction %}<div class="ar" dir="rtl" lang="ar">{{ m.instruction }}</div>{% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">Nothing scheduled today.{% if not res.medicines and not review_count %} <a href="/medicines">Add the first medicine →</a>{% endif %}</p>
+  {% endif %}
+</section>
+
+{% if injections %}
+<section class="card">
+  <h2>Next injections</h2>
+  <ul class="plain">
+    {% for m, at in injections %}
+    <li><strong dir="auto">{{ m.name }}</strong> — {{ at.strftime('%a %d %b %Y, %H:%M') }}
+      <span class="muted">(every {{ m.every_n }} days)</span></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if as_needed %}
+<section class="card">
+  <h2>As needed <span class="muted">(no reminders)</span></h2>
+  <ul class="plain">
+    {% for m in as_needed %}
+    <li><strong dir="auto">{{ m.name }}</strong>{% if m.dose %} <span class="dose" dir="auto">{{ m.dose }}</span>{% endif %}
+      {% if m.purpose %}<div class="purpose" dir="auto">{{ m.purpose }}</div>{% endif %}
+      {% if m.instruction %}<div class="ar" dir="rtl" lang="ar">{{ m.instruction }}</div>{% endif %}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% endblock %}
