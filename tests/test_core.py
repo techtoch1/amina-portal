@@ -183,3 +183,15 @@ def test_reminders_are_sent_with_a_name(settings):
     assert [reminder_name(x) for x in d] == ["Meds 08:00 - Valtrex", "Copy Meds 08:00 - Valtrex", "Meds 20:00 - Valtrex", "Copy Meds 20:00 - Valtrex"]
     long = Medicine(row=2, name="A" * 200, dose="", instruction="", purpose="", kind="daily", times=["08:00"])
     assert len(reminder_name(build_desired([long], datetime(2026, 10, 16, 7, 0), "Asia/Beirut", [("mom", "1")])[0])) <= 80
+
+
+def test_message_includes_arabic_purpose_only():
+    from app.excel import Medicine
+    from app.messages import build_message
+    m = Medicine(row=1, name="Valtrex", dose="500 mg", instruction="حبة صباحاً ومساءً", purpose="Antiviral",
+                 kind="daily", times=["08:00"], purpose_ar="مضاد للفيروسات")
+    text = build_message([m])
+    assert "   حبة صباحاً ومساءً\n   الغرض: مضاد للفيروسات" in text
+    assert "الغرض" not in build_message([m], with_purpose=False)
+    m.purpose_ar = ""  # no Arabic -> no line, and never the English purpose
+    assert "الغرض" not in build_message([m]) and "Antiviral" not in build_message([m])

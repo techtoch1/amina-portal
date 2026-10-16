@@ -418,3 +418,25 @@ def test_send_test_reminder_goes_only_to_my_number(settings, tmp_path, monkeypat
     assert c.post("/api/test-reminder", json={"fingerprint": fp, "to": "mom", "confirm": True}, headers=h).status_code == 400
     settings.my_number = ""
     assert c.post("/api/test-reminder", json={"fingerprint": active_fp}, headers=h).status_code == 400
+
+
+def test_purpose_line_in_reminders_and_toggle(settings, tmp_path):
+    c = make(settings)
+    h = login(c, settings)
+    imported(c, h, tmp_path)
+    c.post("/api/arabic/fill", headers=h)
+    delta = med_id(c, "Delta")
+    c.post(f"/api/medicines/{delta}/reminder", json={"on": True, "frequency": "daily", "times": ["08:00"]}, headers=h)
+    plan = c.post("/api/sync/preview", headers=h).json()
+    assert "الغرض: مضاد للفيروسات" in plan["create"][0]["message"]  # 'Antiviral' filled in Arabic
+    assert "Antiviral" not in plan["create"][0]["message"]
+    c.post("/api/sync/apply", json={"hash": plan["hash"]}, headers=h)
+    assert c.post("/api/sync/preview", headers=h).json()["create"] == []  # in sync
+    # switching it off changes the text -> the old reminders are cancelled and re-created
+    assert "الغرض" in c.get("/settings").text and "Example" in c.get("/settings").text
+    assert c.put("/api/message-options", json={"include_purpose": False}, headers=h).json() == {"include_purpose": False}
+    plan = c.post("/api/sync/preview", headers=h).json()
+    assert len(plan["cancel"]) == 2 and len(plan["create"]) == 2 and "الغرض" not in plan["create"][0]["message"]
+    assert c.put("/api/message-options", json={"include_purpose": True}, headers=h).json() == {"include_purpose": True}
+    assert c.post("/api/sync/preview", headers=h).json()["cancel"] == []  # back to what is already on Wbiztool
+    assert c.put("/api/message-options", json={"include_purpose": False}).status_code == 403  # CSRF

@@ -81,7 +81,7 @@ def _cron_dow(py_weekdays):
     return ",".join(str(d) for d in sorted({(w + 1) % 7 for w in py_weekdays}))
 
 
-def build_desired(meds, now, tz_name, recipients):
+def build_desired(meds, now, tz_name, recipients, with_purpose=True):
     """recipients: [("mom", phone), ("me", phone)]. Groups medicines due at the same moment."""
     groups = {}  # key -> {"kind", "cron", "fire_at", "meds"}
     for m in meds:
@@ -111,7 +111,7 @@ def build_desired(meds, now, tz_name, recipients):
         for who, phone in recipients:
             if not phone:
                 continue
-            message = build_message(g["meds"], copy=(who == "me"))
+            message = build_message(g["meds"], copy=(who == "me"), with_purpose=with_purpose)
             if g["kind"] == "oneoff":
                 group_key = f"oneoff|{g['fire_at'][11:]}|{who}|" + "|".join(names)
             else:

@@ -306,6 +306,10 @@
       box.textContent = '· connected ✔' + (s.whatsapp_error ? ' (status page unavailable)' : ''); box.className = 'ok';
     }).catch(() => {});
 
+    if ($('with-purpose')) $('with-purpose').onchange = async (e) => {
+      const {ok, data} = await call('PUT', '/api/message-options', {include_purpose: e.target.checked});
+      if (ok) { toastNext('Saved. Reminders will be re-created when you Review & apply.'); location.reload(); } else say($('msg-result'), false, data.error);
+    };
     $('slots-form').onsubmit = async (e) => {
       e.preventDefault(); const f = e.target;
       const {ok, data} = await call('PUT', '/api/slots', {morning: f.morning.value, noon: f.noon.value, evening: f.evening.value, night: f.night.value});

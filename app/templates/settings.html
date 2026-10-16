@@ -32,6 +32,15 @@
 </section>
 
 <section class="card">
+  <h2>Reminder message</h2>
+  <p class="muted">Each WhatsApp reminder lists the medicine, its dose and how to take it. You can also add what it is for, in Arabic. Medicines without an Arabic purpose are sent without that line — use <em>Fill missing Arabic</em> on the Medicines page.</p>
+  <label class="check"><input type="checkbox" id="with-purpose" {{ 'checked' if with_purpose }}> <span>Add what the medicine is for (in Arabic) to each reminder</span></label>
+  <p id="msg-result" role="status"></p>
+  {% if example_message %}<h3>Example</h3><pre class="msg" dir="auto">{{ example_message }}</pre>{% endif %}
+  <p class="muted">Wbiztool reminders can't be edited, so after changing this the existing reminders are cancelled and re-created the next time you press Review &amp; apply.</p>
+</section>
+
+<section class="card">
   <h2>Default reminder times</h2>
   <p class="muted">Used to suggest times from "When to take" (e.g. "morning &amp; evening") and for the preset buttons. Always check them against the prescription.</p>
   <form id="slots-form" class="stack">

@@ -26,6 +26,11 @@ def recipients(settings, db):
     return out
 
 
+def include_purpose(db):
+    """Add 'الغرض: ...' (what the medicine is for, in Arabic) to each reminder. On by default."""
+    return db.get_setting("msg.purpose", "1") == "1"
+
+
 def copy_enabled(settings, db):
     return db.get_setting("copy_to_me", "1" if settings.copy_to_me_default else "0") == "1"
 
@@ -40,7 +45,7 @@ def expire_finished(db, now):
 def compute_plan(settings, db, medicines, now=None):
     now = now or local_now(settings)
     expire_finished(db, now)
-    desired = build_desired(medicines, now, settings.timezone, recipients(settings, db))
+    desired = build_desired(medicines, now, settings.timezone, recipients(settings, db), with_purpose=include_purpose(db))
     active = db.active()
     have = {r["fingerprint"] for r in active}
     want = {d.fingerprint for d in desired}

@@ -25,7 +25,8 @@ from .excel import classify_frequency, details_from_form, load_from_db, norm, re
 from .schedule import cron_human, next_cron_fire, next_injections, today_agenda
 from .messages import COPY_NOTE
 from .suggest import DEFAULT_SLOTS, SLOT_LABELS, suggestion
-from .sync import apply_plan, compute_plan, copy_enabled, local_now, plan_to_json, rollover
+from .messages import build_message
+from .sync import apply_plan, compute_plan, copy_enabled, include_purpose, local_now, plan_to_json, rollover
 from .wbiztool import WbizClient, WbizError
 
 HERE = Path(__file__).parent
@@ -283,8 +284,13 @@ def create_app(settings=None, client=None):
 
     @app.get("/settings", response_class=HTMLResponse, dependencies=[Depends(auth)])
     def settings_page(request: Request):
+        res, _stopped = load_from_db(db)
+        sample = next((m for m in res.medicines if m.purpose_ar and m.instruction), None) or next(iter(res.medicines), None)
+        with_purpose = include_purpose(db)
+        example = build_message([sample], with_purpose=with_purpose) if sample else ""
         return templates.TemplateResponse(request, "settings.html", base_ctx(
-            request, "settings", conf=_config_view(), family_enabled=bool(db.get_setting(FAMILY_KEY))))
+            request, "settings", conf=_config_view(), family_enabled=bool(db.get_setting(FAMILY_KEY)),
+            with_purpose=with_purpose, example_message=example))
 
     def _reminder_rows():
         now = local_now(settings)
@@ -590,6 +596,12 @@ def create_app(settings=None, client=None):
                     raise HTTPException(400, f"'{v}' is not a valid time")
                 db.set_setting("slot." + key, v)
         return slots()
+
+    @app.put("/api/message-options", dependencies=[Depends(auth), Depends(csrf)])
+    async def message_options(request: Request):
+        body = await request.json()
+        db.set_setting("msg.purpose", "1" if body.get("include_purpose") else "0")
+        return {"include_purpose": include_purpose(db)}
 
     @app.put("/api/family-access", dependencies=[Depends(auth), Depends(csrf)])
     async def set_family_access(request: Request):
