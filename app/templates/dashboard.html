@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf" content="{{ csrf }}">
+<title>Medicine reminders</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <h1>Medicine reminders</h1>
+  <button class="btn small" id="logout">Sign out</button>
+</header>
+<main>
+
+{% if errors %}
+<section class="card warn"><h2>Excel problem</h2>
+  <ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul></section>
+{% endif %}
+
+<section class="card">
+  <h2>Today <span class="muted">{{ today_label }}</span></h2>
+  {% if agenda %}
+  <ul class="agenda">
+    {% for t, m, past in agenda %}
+    <li class="{{ 'past' if past else '' }}">
+      <span class="time">{{ t }}</span>
+      <div class="med">
+        <strong dir="auto">{{ m.name }}</strong>{% if m.dose %} <span class="dose" dir="auto">{{ m.dose }}</span>{% endif %}
+        {% if m.purpose %}<div class="purpose" dir="auto">{{ m.purpose }}</div>{% endif %}
+        {% if m.instruction %}<div class="ar" dir="rtl" lang="ar">{{ m.instruction }}</div>{% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="muted">Nothing scheduled today.</p>{% endif %}
+</section>
+
+{% if injections %}
+<section class="card">
+  <h2>Next injections</h2>
+  <ul class="plain">
+    {% for m, at in injections %}
+    <li><strong dir="auto">{{ m.name }}</strong> — {{ at.strftime('%a %d %b %Y, %H:%M') }}
+      <span class="muted">(every {{ m.every_n }} days)</span></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<section class="card" id="wbiz">
+  <h2>Wbiztool</h2>
+  {% if not configured %}<p class="err">Credentials missing in .env</p>{% endif %}
+  {% if not verified %}<p class="warn-text">Sending and syncing are blocked: WBIZ_DOCS_VERIFIED is false (see README).</p>{% endif %}
+  <p id="wb-status" class="muted">Checking…</p>
+  <div class="row">
+    <button class="btn" id="test-btn">Send test message to my number</button>
+  </div>
+  <p id="test-result" role="status"></p>
+  <h3>Recent messages</h3>
+  <ul class="plain" id="events">
+    {% for e in events %}
+    <li class="{{ 'ok' if e.ok else 'bad' }}">{{ '✔' if e.ok else '✖' }} {{ e.ts[:16].replace('T',' ') }} UTC · {{ e.kind }} · {{ e.detail }}</li>
+    {% else %}<li class="muted">Nothing yet.</li>{% endfor %}
+  </ul>
+</section>
+
+<section class="card">
+  <h2>Sync to Wbiztool</h2>
+  <label class="check"><input type="checkbox" id="copy" {{ 'checked' if copy }}> Send a copy of each reminder to my number</label>
+  <div class="row"><button class="btn primary" id="preview-btn" {{ 'disabled' if errors }}>Preview changes</button></div>
+  <div id="plan" hidden>
+    <h3>To cancel (<span id="n-cancel">0</span>)</h3><ul class="plan" id="cancel-list"></ul>
+    <h3>To create (<span id="n-create">0</span>)</h3><ul class="plan" id="create-list"></ul>
+    <p class="muted"><span id="n-keep">0</span> reminders unchanged.</p>
+    <label class="check"><input type="checkbox" id="approve"> I reviewed this list and approve it</label>
+    <button class="btn primary" id="apply-btn" disabled>Apply to Wbiztool</button>
+  </div>
+  <ul class="plain" id="apply-result"></ul>
+</section>
+
+{% if review %}
+<section class="card warn">
+  <h2>Needs review ({{ review|length }})</h2>
+  <p class="muted">No reminder is created for these rows. Fix them in the Excel file.</p>
+  <ul>
+    {% for r in review %}
+    <li><strong dir="auto">Row {{ r.row }}{% if r.name %}: {{ r.name }}{% endif %}</strong> — {{ r.reasons|join('; ') }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if as_needed %}
+<section class="card">
+  <h2>As needed <span class="muted">(no reminders)</span></h2>
+  <ul class="plain">
+    {% for m in as_needed %}
+    <li><strong dir="auto">{{ m.name }}</strong>{% if m.dose %} <span class="dose" dir="auto">{{ m.dose }}</span>{% endif %}
+      {% if m.purpose %}<div class="purpose" dir="auto">{{ m.purpose }}</div>{% endif %}
+      {% if m.instruction %}<div class="ar" dir="rtl" lang="ar">{{ m.instruction }}</div>{% endif %}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

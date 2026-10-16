@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login">
+<main class="card narrow">
+  <h1>Medicine reminders</h1>
+  <form method="post" action="/login">
+    <label for="pw">Password</label>
+    <input id="pw" name="password" type="password" autocomplete="current-password" autofocus required>
+    {% if error %}<p class="err" role="alert">{{ error }}</p>{% endif %}
+    <button class="btn primary" type="submit">Sign in</button>
+  </form>
+</main>
+</body>
+</html>

@@ -1,0 +1,29 @@
+:root{--bg:#f6f7f9;--fg:#1c2330;--card:#fff;--line:#e2e6ec;--muted:#667085;--accent:#1f6feb;--ok:#127a3d;--bad:#b42318;--warnbg:#fff6e5;--warnline:#f0c36b}
+@media (prefers-color-scheme:dark){:root{--bg:#10141b;--fg:#e8ecf3;--card:#181e28;--line:#2a3342;--muted:#9aa5b8;--accent:#5b9dff;--ok:#4cc27f;--bad:#ff7b72;--warnbg:#2b2413;--warnline:#6b5420}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif}
+.top{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;max-width:760px;margin:0 auto}
+h1{font-size:1.25rem;margin:0}h2{font-size:1.05rem;margin:0 0 .6rem}h3{font-size:.95rem;margin:1rem 0 .4rem}
+main{max-width:760px;margin:0 auto;padding:0 16px 40px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0}
+.card.warn{background:var(--warnbg);border-color:var(--warnline)}
+.card.narrow{max-width:360px;margin:20vh auto 0}
+.muted{color:var(--muted);font-weight:400;font-size:.9rem}
+.err,.bad{color:var(--bad)}.ok{color:var(--ok)}.warn-text{color:var(--bad);font-size:.9rem}
+ul{padding-inline-start:1.2rem;margin:.3rem 0}ul.plain,ul.agenda,ul.plan{list-style:none;padding:0}
+ul.plain li{padding:.25rem 0}
+.agenda li{display:flex;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
+.agenda li:first-child{border-top:0}.agenda .past{opacity:.55}
+.time{font-variant-numeric:tabular-nums;font-weight:700;min-width:3.4rem}
+.dose{color:var(--muted)}.purpose{font-size:.9rem;color:var(--muted)}
+.ar{margin-top:2px;text-align:right;font-size:1.05rem;unicode-bidi:plaintext}
+.plan li{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0}
+.plan pre{white-space:pre-wrap;margin:6px 0 0;font:inherit;text-align:right;unicode-bidi:plaintext}
+.plan .meta{font-size:.85rem;color:var(--muted)}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin:.5rem 0}
+.check{display:flex;gap:8px;align-items:center;margin:.5rem 0}
+.btn{min-height:44px;padding:0 16px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg);font:inherit;cursor:pointer}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.small{min-height:36px}.btn:disabled{opacity:.5;cursor:not-allowed}
+input[type=password]{width:100%;min-height:44px;padding:0 12px;margin:6px 0 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg);font:inherit}
+@media (max-width:480px){.btn{width:100%}.top .btn{width:auto}}
