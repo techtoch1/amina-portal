@@ -33,18 +33,25 @@ PATHS = {
 }
 
 FIELDS = {
-    "name": "name",  # Wbiztool answered "Reminder name cannot be null" when this was missing
+    "name": "name",  # confirmed needed: "Reminder name cannot be null"
     "phone": "phone",
-    "message": "msg",
+    "message": "message_template",  # confirmed needed: "Message template cannot be null"
     "cron": "cron",
     "timezone": "timezone",
     "schedule_time": "schedule_time",  # "YYYY-MM-DD HH:MM" in `timezone`
     "reminder_id": "reminder_id",
     "message_id": "msg_id",
 }
-# Extra keys that carry the same name. The exact field name isn't confirmed (the error only says
-# "Reminder name"), and unknown extra string fields are normally ignored, so both are sent.
-NAME_ALIASES = ("reminder_name",)
+# Wbiztool validates one missing field at a time and ignores keys it doesn't know (it accepted extra
+# guessed keys without complaint), so each value is also sent under its other likely names. Once the
+# docs have been checked, trim these lists to the names that are really used.
+ALIASES = {
+    "name": ("reminder_name", "title"),
+    "phone": ("phone_number", "mobile", "recipient", "to"),
+    "message": ("template", "msg", "message"),
+    "cron": ("cron_expression", "schedule"),
+    "timezone": ("time_zone", "tz"),
+}
 # keys searched (recursively) in a response to find the id of a created item
 ID_KEYS = ("reminder_id", "msg_id", "message_id", "id")
 
@@ -147,17 +154,19 @@ class WbizClient:
         return self._post(PATHS["reminder_list"])
 
     # ---- mutating (blocked until docs verified) ----
-    def _named(self, fields, name):
-        fields[FIELDS["name"]] = name
-        for alias in NAME_ALIASES:
-            fields[alias] = name
-        return fields
+    @staticmethod
+    def _fields(**logical):
+        """{'phone': '9617..', 'message': '..'} -> every name each value is sent under."""
+        out = {}
+        for key, value in logical.items():
+            for field in (FIELDS.get(key, key),) + ALIASES.get(key, ()):
+                out.setdefault(field, value)
+        return out
 
     def create_reminder(self, phone, message, cron, tz, name=""):
         self._require_verified()
-        data = self._post(PATHS["reminder_create"], self._named({
-            FIELDS["phone"]: phone, FIELDS["message"]: message, FIELDS["cron"]: cron, FIELDS["timezone"]: tz,
-        }, name or "Medicine reminder"))
+        data = self._post(PATHS["reminder_create"], self._fields(
+            name=name or "Medicine reminder", phone=phone, message=message, cron=cron, timezone=tz))
         return _find_id(data)
 
     def cancel_reminder(self, remote_id):
@@ -166,10 +175,8 @@ class WbizClient:
 
     def schedule_message(self, phone, message, fire_at, tz, name=""):
         self._require_verified()
-        data = self._post(PATHS["schedule_msg"], self._named({
-            FIELDS["phone"]: phone, FIELDS["message"]: message,
-            FIELDS["schedule_time"]: fire_at, FIELDS["timezone"]: tz,
-        }, name or "Medicine reminder"))
+        data = self._post(PATHS["schedule_msg"], self._fields(
+            name=name or "Medicine reminder", phone=phone, message=message, schedule_time=fire_at, timezone=tz))
         return _find_id(data)
 
     def cancel_scheduled(self, remote_id):
@@ -178,4 +185,4 @@ class WbizClient:
 
     def send_message(self, phone, message):
         self._require_verified()
-        return self._post(PATHS["send_msg"], {FIELDS["phone"]: phone, FIELDS["message"]: message})
+        return self._post(PATHS["send_msg"], self._fields(phone=phone, message=message))

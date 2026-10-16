@@ -163,11 +163,18 @@ def test_reminders_are_sent_with_a_name(settings):
             return {"status": 1, "reminder_id": "r1"}
 
     spy = Spy(settings)
-    spy.create_reminder("96170000001", "msg", "0 8 * * *", "Asia/Beirut", "Meds 08:00 - Valtrex, Ator")
-    spy.schedule_message("96170000001", "msg", "2026-11-17 10:00", "Asia/Beirut", "Meds 11-17 10:00 - Shot")
+    spy.create_reminder("96170000001", "رسالة", "0 8 * * *", "Asia/Beirut", "Meds 08:00 - Valtrex, Ator")
+    spy.schedule_message("96170000001", "رسالة", "2026-11-17 10:00", "Asia/Beirut", "Meds 11-17 10:00 - Shot")
+    spy.send_message("96170000001", "test")
     for _path, f in spy.sent:
-        assert f["name"] and f["reminder_name"] == f["name"] and all(isinstance(v, str) for v in f.values())
-    spy.create_reminder("96170000001", "msg", "0 8 * * *", "Asia/Beirut")  # a default is always supplied
+        assert all(isinstance(v, str) and v for v in f.values())  # strings only, never null/empty
+    first = spy.sent[0][1]
+    # every required field Wbiztool has complained about is present, under its confirmed name and the aliases
+    assert first["name"] == first["reminder_name"] == "Meds 08:00 - Valtrex, Ator"
+    assert first["message_template"] == first["template"] == first["msg"] == "رسالة"
+    assert first["phone"] == first["phone_number"] == "96170000001" and first["cron"] == "0 8 * * *" and first["timezone"] == "Asia/Beirut"
+    assert spy.sent[1][1]["schedule_time"] == "2026-11-17 10:00" and spy.sent[2][1]["msg"] == "test"
+    spy.create_reminder("96170000001", "msg", "0 8 * * *", "Asia/Beirut")  # a default name is always supplied
     assert spy.sent[-1][1]["name"] == "Medicine reminder"
 
     from app.excel import Medicine
