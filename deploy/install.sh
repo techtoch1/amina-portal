@@ -45,8 +45,16 @@ say "Installing app files"
 id amina >/dev/null 2>&1 || useradd --system --home "$APP" --shell /usr/sbin/nologin amina
 mkdir -p "$APP" "$DATA"
 tar --exclude=.git --exclude=data --exclude=.venv --exclude=__pycache__ --exclude=.env -C "$SRC" -cf - . | tar -C "$APP" -xf -
-[[ -d "$APP/.venv" ]] || python3 -m venv "$APP/.venv" || fail "python3-venv missing: sudo apt install python3-venv"
-"$APP/.venv/bin/pip" install -q --upgrade pip && "$APP/.venv/bin/pip" install -q -r "$APP/requirements.txt"
+# A venv left half-made by an earlier failed run (no pip) must be rebuilt, not reused.
+if [[ ! -x "$APP/.venv/bin/pip" ]]; then
+  rm -rf "$APP/.venv"
+  python3 -m venv "$APP/.venv" || fail "couldn't create the virtualenv. Run: sudo apt install -y python3-venv   then re-run this script."
+fi
+[[ -x "$APP/.venv/bin/pip" ]] || fail "virtualenv has no pip. Run: sudo apt install -y python3-venv python3-pip   then re-run."
+"$APP/.venv/bin/pip" install -q --upgrade pip || fail "pip upgrade failed (no internet from the server?)"
+"$APP/.venv/bin/pip" install -q -r "$APP/requirements.txt" || fail "installing Python packages failed (see the error above)"
+"$APP/.venv/bin/python" -c "import fastapi, uvicorn, openpyxl, requests, dotenv, jinja2, itsdangerous, multipart" \
+  || fail "Python packages are still missing after install"
 chown -R root:root "$APP"; chown -R amina:amina "$DATA"; chmod 700 "$DATA"
 
 say "Settings (stored in $ENVF, readable by root and the service only)"
