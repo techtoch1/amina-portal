@@ -72,7 +72,7 @@ def test_navigation_and_pages(settings, tmp_path):
     imported(c, h, tmp_path)
     home = c.get("/", follow_redirects=False)
     assert home.headers["location"] == "/medicines"
-    for path, needle in (("/medicines", "Medicines"), ("/reminders", "Reminders report"), ("/mom", "Log a reading"),
+    for path, needle in (("/medicines", "Medicines"), ("/reminders", "Reminders report"), ("/mom", "Add to the log"),
                          ("/settings", "Wbiztool connection")):
         r = c.get(path)
         assert r.status_code == 200 and needle in r.text
@@ -440,3 +440,44 @@ def test_purpose_line_in_reminders_and_toggle(settings, tmp_path):
     assert c.put("/api/message-options", json={"include_purpose": True}, headers=h).json() == {"include_purpose": True}
     assert c.post("/api/sync/preview", headers=h).json()["cancel"] == []  # back to what is already on Wbiztool
     assert c.put("/api/message-options", json={"include_purpose": False}).status_code == 403  # CSRF
+
+
+def test_status_log_dates_and_upcoming(settings):
+    from datetime import date, timedelta
+    c = make(settings)
+    h = login(c, settings)
+    today = date.today()
+    past = (today - timedelta(days=40)).isoformat()
+    future = (today + timedelta(days=12)).isoformat()
+    post = lambda **kw: c.post("/api/status-log", json=kw, headers=h)  # noqa: E731
+    assert post(kind="Doctor visit", value="Dr. Kamar", note="Blood test results", date=past, time="14:30").status_code == 200
+    assert post(kind="Appointment", value="Oncology", date=future, time="09:15").status_code == 200
+    assert post(kind="Blood pressure", value="130/80").status_code == 200  # no date -> today
+    assert post(kind="Blood pressure", value="120/70", date=past).status_code == 200
+    for bad in ({"date": "31-12-2026"}, {"date": "2026-02-31"}, {"date": "1990-01-01"}, {"time": "25:00"}, {"time": "9am"}):
+        assert post(kind="Note", note="x", **bad).status_code == 400, bad
+    mom = c.get("/mom").text
+    assert "Upcoming" in mom and "Oncology" in mom and "09:15" in mom
+    history = mom.split("History")[1]
+    assert "Oncology" not in history                      # future entries are not in the history
+    assert history.index("130/80") < history.index("Dr. Kamar")  # newest event date first
+    assert "14:30" in history and "Blood test results" in history
+    # 'latest readings' use the newest reading by event date, never a visit or a future entry
+    latest = mom.split("Latest readings")[1].split("</section>")[0]
+    assert "130/80" in latest and "120/70" not in latest and "Dr. Kamar" not in latest
+    assert 'name="date" type="date" value="' + today.isoformat() in mom
+
+
+def test_status_log_migration_keeps_old_entries(tmp_path):
+    import sqlite3
+    from app.db import DB
+    path = tmp_path / "old.db"
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE status_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '')")
+    con.execute("INSERT INTO status_log(ts,kind,value) VALUES('2026-10-01T10:00:00+00:00','Blood pressure','125/80')")
+    con.commit(); con.close()
+    db = DB(path)
+    row = db.list_status()[0]
+    assert row["event_date"] == "2026-10-01" and row["event_time"] == "" and row["value"] == "125/80"
+    db.add_status("Doctor visit", "Dr X", "", "2026-12-01", "10:00")
+    assert db.list_status()[0]["event_date"] == "2026-12-01"

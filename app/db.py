@@ -56,6 +56,11 @@ class DB:
             for col in ("when_en", "purpose_ar", "notes_en", "notes_ar", "form", "form_ar"):  # added after the first release
                 if col not in have:
                     c.execute(f"ALTER TABLE medicines ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+            slog = {r["name"] for r in c.execute("PRAGMA table_info(status_log)")}
+            if "event_date" not in slog:  # the day it happened / will happen (entries used to have only a created time)
+                c.execute("ALTER TABLE status_log ADD COLUMN event_date TEXT NOT NULL DEFAULT ''")
+                c.execute("ALTER TABLE status_log ADD COLUMN event_time TEXT NOT NULL DEFAULT ''")
+                c.execute("UPDATE status_log SET event_date=substr(ts,1,10) WHERE event_date=''")
             if "remind" not in have:  # reminders are now opt-in per medicine; keep the ones that already had times
                 c.execute("ALTER TABLE medicines ADD COLUMN remind INTEGER NOT NULL DEFAULT 0")
                 c.execute("UPDATE medicines SET remind=1 WHERE times != '' AND active=1")
@@ -177,13 +182,16 @@ class DB:
         for k, v in values.items():
             self.set_setting("profile." + k, v)
 
-    def add_status(self, kind, value, note):
+    def add_status(self, kind, value, note, event_date="", event_time=""):
         with self.conn() as c:
-            c.execute("INSERT INTO status_log(ts,kind,value,note) VALUES(?,?,?,?)", (now_iso(), kind, value, note))
+            c.execute("INSERT INTO status_log(ts,kind,value,note,event_date,event_time) VALUES(?,?,?,?,?,?)",
+                      (now_iso(), kind, value, note, event_date or now_iso()[:10], event_time))
 
     def list_status(self, limit=60):
+        """Newest event first (by the date it happened or is planned), not by when it was typed in."""
         with self.conn() as c:
-            return [dict(r) for r in c.execute("SELECT * FROM status_log ORDER BY id DESC LIMIT ?", (limit,))]
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM status_log ORDER BY event_date DESC, event_time DESC, id DESC LIMIT ?", (limit,))]
 
     def delete_status(self, sid):
         with self.conn() as c:

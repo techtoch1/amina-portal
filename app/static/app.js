@@ -252,7 +252,7 @@
   if (page === 'mom') {
     $('status-form').onsubmit = async (e) => {
       e.preventDefault(); const f = e.target;
-      const {ok, data} = await call('POST', '/api/status-log', {kind: f.kind.value, value: f.value.value, note: f.note.value});
+      const {ok, data} = await call('POST', '/api/status-log', {kind: f.kind.value, value: f.value.value, note: f.note.value, date: f.date.value, time: f.time.value});
       if (!ok) { $('status-error').textContent = data.error; return; }
       toastNext('Added to the log.'); location.reload();
     };

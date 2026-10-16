@@ -3,11 +3,12 @@ import hashlib
 import hmac
 import io
 import logging
+import re
 import secrets
 import threading
 import time as _time
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -33,7 +34,8 @@ HERE = Path(__file__).parent
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 PROFILE_FIELDS = {"name": 120, "age": 40, "conditions": 1000, "allergies": 1000, "doctor": 120, "doctor_phone": 40,
                   "emergency_contact": 200, "pharmacy": 200, "notes": 2000}
-STATUS_KINDS = ["Blood pressure", "Blood sugar", "Weight", "Temperature", "Mood / condition", "Doctor visit", "Note"]
+STATUS_KINDS = ["Doctor visit", "Appointment", "Lab test", "Blood pressure", "Blood sugar", "Weight", "Temperature",
+                "Mood / condition", "Note"]
 MAX_UPLOAD = 2 * 1024 * 1024
 TEST_MIN_INTERVAL = 3.0  # seconds between manual test sends
 TEST_HEADER = "🧪 رسالة تجريبية — Test message (not a real reminder)\n\n"
@@ -160,6 +162,16 @@ def create_app(settings=None, client=None):
     templates.env.filters["local"] = local_str
     templates.env.filters["ar_dose"] = arabic_dose
 
+    def event_str(row):
+        """'Fri 16 Oct 2026, 14:30' for an entry's own date (and time, if it has one)."""
+        try:
+            text = datetime.strptime(row["event_date"], "%Y-%m-%d").strftime("%a %d %b %Y")
+        except (ValueError, KeyError):
+            return local_str(row.get("ts", ""))
+        return f"{text}, {row['event_time']}" if row.get("event_time") else text
+
+    templates.env.filters["event"] = event_str
+
     # ---- login ----
     @app.get("/login", response_class=HTMLResponse)
     def login_page(request: Request):
@@ -277,11 +289,16 @@ def create_app(settings=None, client=None):
 
     @app.get("/mom", response_class=HTMLResponse, dependencies=[Depends(auth)])
     def mom_page(request: Request):
-        log = db.list_status(60)
+        today = local_now(settings).date().isoformat()
+        log = db.list_status(120)
+        past = [r for r in log if r["event_date"] <= today]
+        upcoming = sorted((r for r in log if r["event_date"] > today), key=lambda r: (r["event_date"], r["event_time"]))
         latest = {}
-        for row in log:
-            latest.setdefault(row["kind"], row)
-        return templates.TemplateResponse(request, "mom.html", base_ctx(request, "mom", kinds=STATUS_KINDS, log=log, latest=latest))
+        for row in past:
+            if row["kind"] not in ("Doctor visit", "Appointment", "Lab test", "Note"):  # readings only
+                latest.setdefault(row["kind"], row)
+        return templates.TemplateResponse(request, "mom.html", base_ctx(
+            request, "mom", kinds=STATUS_KINDS, log=past, upcoming=upcoming, latest=latest, today=today))
 
     @app.get("/settings", response_class=HTMLResponse, dependencies=[Depends(auth)])
     def settings_page(request: Request):
@@ -637,7 +654,18 @@ def create_app(settings=None, client=None):
         value, note = str(body.get("value") or "").strip()[:80], str(body.get("note") or "").strip()[:500]
         if not value and not note:
             raise HTTPException(400, "Enter a value or a note")
-        db.add_status(kind, value, note)
+        today = local_now(settings).date()
+        raw_date = str(body.get("date") or "").strip()
+        try:
+            when = date.fromisoformat(raw_date) if raw_date else today
+        except ValueError:
+            raise HTTPException(400, "That date is not valid")
+        if abs((when - today).days) > 3660:
+            raise HTTPException(400, "Choose a date within 10 years")
+        raw_time = str(body.get("time") or "").strip()
+        if raw_time and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", raw_time):
+            raise HTTPException(400, "That time is not valid")
+        db.add_status(kind, value, note, when.isoformat(), raw_time)
         return {"ok": True}
 
     @app.delete("/api/status-log/{sid}", dependencies=[Depends(auth), Depends(csrf)])

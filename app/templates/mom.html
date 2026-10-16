@@ -9,19 +9,37 @@
 <section class="stats" aria-label="Latest readings">
   {% for kind, row in latest.items() %}
   <div class="stat"><span class="lbl">{{ kind }}</span><span class="num sm" dir="auto">{{ row.value or '—' }}</span>
-    <span class="sub" dir="auto">{% if row.note %}{{ row.note }} · {% endif %}{{ row.ts|local }}</span></div>
+    <span class="sub" dir="auto">{% if row.note %}{{ row.note }} · {% endif %}{{ row|event }}</span></div>
   {% endfor %}
 </section>
 {% endif %}
 
+{% if upcoming %}
 <section class="card">
-  <h2>Log a reading or note</h2>
+  <h2>Upcoming</h2>
+  <ul class="timeline">
+    {% for row in upcoming %}
+    <li><span class="mark soft" aria-hidden="true">📅</span>
+      <div><strong>{{ row.kind }}</strong> — <span dir="auto">{{ row.value }}{% if row.value and row.note %} · {% endif %}{{ row.note }}</span>
+        <div class="muted">{{ row|event }} <button class="link danger" data-del-status="{{ row.id }}" aria-label="Delete entry">delete</button></div></div></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Add to the log</h2>
+  <p class="muted">Pick the date it happened, or a future date for an appointment — future entries appear under Upcoming.</p>
   <form id="status-form" class="stack">
     <div class="two">
       <label>What <select name="kind">{% for k in kinds %}<option>{{ k }}</option>{% endfor %}</select></label>
-      <label>Value <input name="value" maxlength="80" placeholder="e.g. 130/80, 112 mg/dL" dir="auto"></label>
+      <label>Value <input name="value" maxlength="80" placeholder="e.g. Dr. Kamar, 130/80, 112 mg/dL" dir="auto"></label>
     </div>
-    <label>Note <input name="note" maxlength="500" dir="auto" placeholder="Optional"></label>
+    <div class="two">
+      <label>Date <input name="date" type="date" value="{{ today }}" required></label>
+      <label>Time (optional) <input name="time" type="time"></label>
+    </div>
+    <label>Note <input name="note" maxlength="500" dir="auto" placeholder="Optional — e.g. results, what the doctor said"></label>
     <p id="status-error" class="err" role="alert"></p>
     <div><button class="btn primary" type="submit">Add to log</button></div>
   </form>
@@ -34,7 +52,7 @@
     {% for row in log %}
     <li><span class="mark soft" aria-hidden="true">•</span>
       <div><strong>{{ row.kind }}</strong> · <span dir="auto">{{ row.value }}{% if row.note %} — {{ row.note }}{% endif %}</span>
-        <div class="muted">{{ row.ts|local }} <button class="link danger" data-del-status="{{ row.id }}" aria-label="Delete entry">delete</button></div></div></li>
+        <div class="muted">{{ row|event }} <button class="link danger" data-del-status="{{ row.id }}" aria-label="Delete entry">delete</button></div></div></li>
     {% endfor %}
   </ul>
   {% else %}<div class="empty"><p>Nothing logged yet.</p></div>{% endif %}
