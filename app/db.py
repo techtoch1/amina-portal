@@ -53,9 +53,12 @@ class DB:
         with self.conn() as c:
             c.executescript(SCHEMA)
             have = {r["name"] for r in c.execute("PRAGMA table_info(medicines)")}
-            for col in ("when_en", "purpose_ar", "notes_en", "notes_ar"):  # added after the first release
+            for col in ("when_en", "purpose_ar", "notes_en", "notes_ar", "form"):  # added after the first release
                 if col not in have:
                     c.execute(f"ALTER TABLE medicines ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+            if "remind" not in have:  # reminders are now opt-in per medicine; keep the ones that already had times
+                c.execute("ALTER TABLE medicines ADD COLUMN remind INTEGER NOT NULL DEFAULT 0")
+                c.execute("UPDATE medicines SET remind=1 WHERE times != '' AND active=1")
         try:  # holds the API key and health data: owner-only
             os.chmod(self.path, 0o600)
         except OSError:
@@ -113,7 +116,7 @@ class DB:
 
     # ---- medicines ----
     MED_FIELDS = ("name", "dose", "times", "frequency", "day", "start_date", "last_date", "instruction", "purpose",
-                  "when_en", "purpose_ar", "notes_en", "notes_ar")
+                  "when_en", "purpose_ar", "notes_en", "notes_ar", "form")
 
     def list_medicines(self):
         with self.conn() as c:
@@ -124,19 +127,33 @@ class DB:
             row = c.execute("SELECT * FROM medicines WHERE id=?", (mid,)).fetchone()
         return dict(row) if row else None
 
-    def add_medicine(self, rec, active=True):
+    def add_medicine(self, rec, active=True, remind=False):
+        cols = list(self.MED_FIELDS) + ["remind", "active", "created_at"]
+        vals = [rec.get(f, "") for f in self.MED_FIELDS] + [int(remind), int(active), now_iso()]
         with self.conn() as c:
-            cur = c.execute(
-                "INSERT INTO medicines(name,dose,times,frequency,day,start_date,last_date,instruction,purpose,"
-                "when_en,purpose_ar,notes_en,notes_ar,active,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (*[rec.get(f, "") for f in self.MED_FIELDS], int(active), now_iso()))
+            cur = c.execute(f"INSERT INTO medicines({','.join(cols)}) VALUES({','.join('?' * len(cols))})", vals)
             return cur.lastrowid
 
-    def update_medicine(self, mid, rec):
-        sets = ",".join(f"{f}=?" for f in self.MED_FIELDS)
+    def update_medicine(self, mid, fields):
+        """Update only the given columns."""
+        keys = [k for k in fields if k in self.MED_FIELDS]
+        if not keys:
+            return False
         with self.conn() as c:
-            return c.execute(f"UPDATE medicines SET {sets} WHERE id=?",
-                             (*[rec.get(f, "") for f in self.MED_FIELDS], mid)).rowcount > 0
+            return c.execute(f"UPDATE medicines SET {','.join(k + '=?' for k in keys)} WHERE id=?",
+                             [fields[k] for k in keys] + [mid]).rowcount > 0
+
+    def set_remind(self, mid, on):
+        with self.conn() as c:
+            return c.execute("UPDATE medicines SET remind=? WHERE id=?", (int(on), mid)).rowcount > 0
+
+    def delete_all_medicines(self):
+        with self.conn() as c:
+            return c.execute("DELETE FROM medicines").rowcount
+
+    def clear_status(self):
+        with self.conn() as c:
+            return c.execute("DELETE FROM status_log").rowcount
 
     def set_medicine_active(self, mid, active):
         with self.conn() as c:

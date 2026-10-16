@@ -62,7 +62,7 @@ class FakeClient(WbizClient):
         return {"status": 1, "data": {"reminder_id": f"r{self.n}"}}
 
 
-def test_sync_flow(xlsx, settings, tmp_path):
+def test_sync_flow(xlsx, settings, tmp_path, monkeypatch):
     db = DB(tmp_path / "t.db")
     meds = load_medicines(xlsx).medicines
     c = FakeClient(settings)
@@ -76,7 +76,7 @@ def test_sync_flow(xlsx, settings, tmp_path):
     assert not c.calls  # nothing sent without a matching approval
     # patch local_now so apply sees the same "now"
     import app.sync as sync
-    sync.local_now = lambda s: NOW
+    monkeypatch.setattr(sync, "local_now", lambda s: NOW)
     res = apply_plan(c, settings, db, meds, plan["hash"])
     assert all(r["ok"] for r in res) and len(db.active()) == 8
     assert not compute_plan(settings, db, meds, NOW)["create"]
@@ -88,7 +88,7 @@ def test_sync_flow(xlsx, settings, tmp_path):
     assert len(p2["cancel"]) == 2 and len(p2["create"]) == 2
     # after the injection passes, rollover schedules the next one
     later = datetime(2026, 10, 20, 11, 0)
-    sync.local_now = lambda s: later
+    monkeypatch.setattr(sync, "local_now", lambda s: later)
     made = rollover(c, settings, db, meds)
     assert len(made) == 2 and any("2026-11-17" in m for m in made)
 

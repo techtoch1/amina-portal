@@ -1,11 +1,13 @@
 import hmac
-from contextlib import asynccontextmanager
 import logging
 import secrets
 import threading
 import time as _time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -15,11 +17,8 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .config import Settings
 from .db import DB
-from io import BytesIO
-from zoneinfo import ZoneInfo
-
-from .excel import classify_frequency, form_to_rec, load_from_db, norm, read_sheet, rec_to_form
-from .schedule import describe, next_injections, today_agenda
+from .excel import classify_frequency, details_from_form, load_from_db, norm, read_sheet, rec_to_form, schedule_to_rec
+from .schedule import next_injections
 from .sync import apply_plan, compute_plan, copy_enabled, local_now, plan_to_json, rollover
 from .wbiztool import WbizClient, WbizError
 
@@ -29,6 +28,17 @@ PROFILE_FIELDS = {"name": 120, "age": 40, "conditions": 1000, "allergies": 1000,
                   "emergency_contact": 200, "pharmacy": 200, "notes": 2000}
 STATUS_KINDS = ["Blood pressure", "Blood sugar", "Weight", "Temperature", "Mood / condition", "Doctor visit", "Note"]
 MAX_UPLOAD = 2 * 1024 * 1024
+
+LABELS = {
+    "en": {"dir": "ltr", "title": "Medicines", "updated": "Updated", "prescriber": "Prescriber", "allergies": "Allergies",
+           "cols": ["Reminder", "Medication", "Dose", "When to take", "For", "Notes"], "regular": "Regular",
+           "as_needed": "As needed", "next": "Next", "empty": "No medicines yet. Add one or import your Excel file.",
+           "off": "Off", "set": "Set reminder"},
+    "ar": {"dir": "rtl", "title": "الأدوية", "updated": "آخر تحديث", "prescriber": "الطبيب", "allergies": "الحساسية",
+           "cols": ["التذكير", "الدواء", "الجرعة", "متى يؤخذ", "لماذا", "ملاحظات"], "regular": "أدوية منتظمة",
+           "as_needed": "عند الحاجة", "next": "الموعد القادم", "empty": "لا توجد أدوية بعد.",
+           "off": "متوقف", "set": "ضبط التذكير"},
+}
 
 
 class _Redact(logging.Filter):
@@ -61,7 +71,7 @@ def create_app(settings=None, client=None):
                        same_site="lax", max_age=7 * 24 * 3600, session_cookie="mr_session")
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     templates = Jinja2Templates(directory=HERE / "templates")
-    cache = {"xl": None, "xl_key": None, "status": (0, None)}
+    cache = {"status": (0, None)}
     failures = {}  # ip -> [count, first_ts]
 
     @app.middleware("http")
@@ -88,8 +98,9 @@ def create_app(settings=None, client=None):
         if not hmac.compare_digest(sent, request.session.get("csrf", "-")):
             raise HTTPException(403, "Bad CSRF token")
 
-    def medicines():
-        return load_from_db(db)[0]
+    def planning_meds():
+        """Only medicines whose reminder is switched on take part in the Wbiztool sync."""
+        return [m for m in load_from_db(db)[0].medicines if m.remind]
 
     def local_str(iso):
         try:
@@ -99,17 +110,6 @@ def create_app(settings=None, client=None):
             return iso
 
     templates.env.filters["local"] = local_str
-
-    def page(request, name, **extra):
-        res, stopped = load_from_db(db)
-        now = local_now(settings)
-        plan = compute_plan(settings, db, res.medicines, now)
-        base = {"csrf": request.session.get("csrf", ""), "now": now, "active_page": name, "profile": db.profile(),
-                "pending": len(plan["create"]) + len(plan["cancel"]), "review_count": len(res.review),
-                "configured": settings.wbiz_configured, "verified": settings.docs_verified,
-                "res": res, "stopped": stopped}
-        base.update(extra)
-        return templates.TemplateResponse(request, name + ".html", base)
 
     # ---- login ----
     @app.get("/login", response_class=HTMLResponse)
@@ -137,83 +137,172 @@ def create_app(settings=None, client=None):
         request.session.clear()
         return JSONResponse({"ok": True})
 
-    # ---- pages ----
+    # ---- the one page ----
+    def _config_view():
+        return {"client_id": settings.client_id or "", "whatsapp_client": settings.whatsapp_client,
+                "mom_number": settings.mom_number, "my_number": settings.my_number,
+                "api_key_set": bool(settings.api_key), "api_key_length": len(settings.api_key),
+                "docs_verified": settings.docs_verified}
+
+    def _remind_text(m):
+        if m.kind == "daily":
+            return " · ".join(m.times)
+        if m.kind == "weekly":
+            return ", ".join(DAY_NAMES[d] for d in m.weekdays) + " " + " · ".join(m.times)
+        if m.kind == "every_n":
+            return f"every {m.every_n} days · " + " · ".join(m.times)
+        return ""
+
     @app.get("/", response_class=HTMLResponse, dependencies=[Depends(auth)])
-    def today(request: Request):
-        res = medicines()
-        now = local_now(settings)
-        agenda = today_agenda(res.medicines, now.date())
-        latest = {}
-        for row in db.list_status(60):
-            latest.setdefault(row["kind"], row)
-        return page(request, "today", today_label=now.strftime("%A, %d %B %Y"),
-                    agenda=[(t, m, t < now.strftime("%H:%M")) for t, m in agenda],
-                    injections=next_injections(res.medicines, now),
-                    as_needed=[m for m in res.medicines if m.kind == "as_needed"], latest=latest)
-
-    @app.get("/medicines", response_class=HTMLResponse, dependencies=[Depends(auth)])
-    def medicines_page(request: Request):
-        res, stopped = load_from_db(db)
-        by_id = {m.row: m for m in res.medicines}
-        review = {r.row: r for r in res.review}
-        rows = []
-        for r in db.list_medicines():
-            m, rv = by_id.get(r["id"]), review.get(r["id"])
-            rows.append({"r": r, "desc": describe(m) if m else "", "problems": rv.reasons if rv else [],
-                         "stopped": not r["active"]})
-        return page(request, "medicines", rows=rows, day_names=DAY_NAMES)
-
-    CHART_LABELS = {
-        "en": {"title": "Medicines", "dir": "ltr", "updated": "Updated", "prescriber": "Prescriber", "allergies": "Allergies",
-               "cols": ["Medication", "Dose", "When to take", "For", "Notes"], "regular": "Regular",
-               "as_needed": "As needed", "next": "Next", "print": "Print / save as PDF", "other": "العربية",
-               "empty": "No medicines yet."},
-        "ar": {"title": "الأدوية", "dir": "rtl", "updated": "آخر تحديث", "prescriber": "الطبيب", "allergies": "الحساسية",
-               "cols": ["الدواء", "الجرعة", "متى يؤخذ", "لماذا", "ملاحظات"], "regular": "أدوية منتظمة",
-               "as_needed": "عند الحاجة", "next": "الموعد القادم", "print": "طباعة / حفظ PDF", "other": "English",
-               "empty": "لا توجد أدوية بعد."},
-    }
-
-    @app.get("/chart", dependencies=[Depends(auth)])
-    def chart_redirect():
-        return RedirectResponse("/chart/en", status_code=303)
-
-    @app.get("/chart/{lang}", response_class=HTMLResponse, dependencies=[Depends(auth)])
-    def chart_page(request: Request, lang: str):
-        if lang not in CHART_LABELS:
-            raise HTTPException(404, "Unknown language")
+    def index(request: Request, lang: str = "en"):
+        lang = lang if lang in LABELS else "en"
+        ar = lang == "ar"
         res, _stopped = load_from_db(db)
-        parsed = {m.row: m for m in res.medicines}
         now = local_now(settings)
-        nxt = dict((m.row, at) for m, at in next_injections(res.medicines, now))
+        parsed = {m.row: m for m in res.medicines}
+        nxt = {m.row: at for m, at in next_injections(res.medicines, now)}
         groups = {"regular": [], "as_needed": []}
-        for r in sorted(db.list_medicines(), key=lambda x: x["id"]):  # same order as entered / imported
+        for r in sorted(db.list_medicines(), key=lambda x: x["id"]):  # same order as in the Excel file
             if not r["active"]:
                 continue
             kind, _n, _p = classify_frequency(norm(r["frequency"]))
             m = parsed.get(r["id"])
-            desc = describe(m) if m else ""
-            ar = lang == "ar"
             groups["as_needed" if kind == "as_needed" else "regular"].append({
-                "name": r["name"], "dose": r["dose"],
-                "when": (r["instruction"] if ar else r["when_en"]) or desc,
-                "purpose": (r["purpose_ar"] or r["purpose"]) if ar else r["purpose"],
-                "notes": (r["notes_ar"] or r["notes_en"]) if ar else r["notes_en"],
-                "next": nxt.get(r["id"]),
+                "id": r["id"], "name": r["name"], "form": r["form"], "dose": r["dose"],
+                "when": ((r["instruction"] if ar else r["when_en"]) or r["when_en"] or r["instruction"]),
+                "purpose": ((r["purpose_ar"] or r["purpose"]) if ar else (r["purpose"] or r["purpose_ar"])),
+                "notes": ((r["notes_ar"] or r["notes_en"]) if ar else (r["notes_en"] or r["notes_ar"])),
+                "remind": bool(r["remind"] and m and m.remind), "remind_text": _remind_text(m) if m and r["remind"] else "",
+                "next": nxt.get(r["id"]) if r["remind"] else None,
             })
-        return page(request, "chart", lang=lang, L=CHART_LABELS[lang], groups=groups,
-                    updated=now.strftime("%d %b %Y"))
+        plan = compute_plan(settings, db, [m for m in res.medicines if m.remind], now)
+        log = db.list_status(40)
+        latest = {}
+        for row in log:
+            latest.setdefault(row["kind"], row)
+        ctx = {"csrf": request.session.get("csrf", ""), "lang": lang, "L": LABELS[lang], "groups": groups,
+               "profile": db.profile(), "pending": len(plan["create"]) + len(plan["cancel"]),
+               "configured": settings.wbiz_configured, "verified": settings.docs_verified,
+               "conf": _config_view(), "copy": copy_enabled(settings, db), "events": db.recent_events(8),
+               "kinds": STATUS_KINDS, "log": log, "day_names": DAY_NAMES, "updated": now.strftime("%d %b %Y"),
+               "total": sum(len(v) for v in groups.values())}
+        return templates.TemplateResponse(request, "index.html", ctx)
 
-    @app.get("/mom", response_class=HTMLResponse, dependencies=[Depends(auth)])
-    def mom_page(request: Request):
-        return page(request, "mom", kinds=STATUS_KINDS, log=db.list_status(60), fields=list(PROFILE_FIELDS))
+    # ---- medicines API ----
+    def _med_or_404(mid):
+        row = db.get_medicine(mid)
+        if not row:
+            raise HTTPException(404, "Medicine not found")
+        return row
 
-    @app.get("/reminders", response_class=HTMLResponse, dependencies=[Depends(auth)])
-    def reminders_page(request: Request):
-        return page(request, "reminders", copy=copy_enabled(settings, db), events=db.recent_events(10),
-                    active_reminders=db.active())
+    def _apply_section(fields, section, current_freq=""):
+        """Regular / As needed. As needed never reminds; Regular keeps its schedule if it has one."""
+        if section == "as_needed":
+            fields.update(frequency="as needed", times="", day="", start_date="", last_date="")
+            return True
+        kind, _n, _p = classify_frequency(norm(current_freq))
+        if kind in (None, "as_needed"):
+            fields["frequency"] = "chart only"
+        return False
 
-    # ---- API ----
+    @app.get("/api/medicines/{mid}", dependencies=[Depends(auth)])
+    def get_medicine(mid: int):
+        return rec_to_form(_med_or_404(mid))
+
+    @app.post("/api/medicines", dependencies=[Depends(auth), Depends(csrf)])
+    async def add_medicine(request: Request):
+        body = await request.json()
+        fields, err = details_from_form(body)
+        if err:
+            raise HTTPException(400, err)
+        _apply_section(fields, body.get("section"))
+        return {"id": db.add_medicine(fields)}
+
+    @app.put("/api/medicines/{mid}", dependencies=[Depends(auth), Depends(csrf)])
+    async def edit_medicine(mid: int, request: Request):
+        row = _med_or_404(mid)
+        body = await request.json()
+        fields, err = details_from_form(body, require_name=False)
+        if err or ("name" in fields and not fields["name"]):
+            raise HTTPException(400, err or "Medicine name is required")
+        if "section" in body:
+            if _apply_section(fields, body["section"], row["frequency"]):
+                db.set_remind(mid, False)
+        db.update_medicine(mid, fields)
+        return {"ok": True}
+
+    @app.post("/api/medicines/{mid}/reminder", dependencies=[Depends(auth), Depends(csrf)])
+    async def medicine_reminder(mid: int, request: Request):
+        row = _med_or_404(mid)
+        body = await request.json()
+        if not body.get("on"):
+            db.set_remind(mid, False)
+            return {"ok": True, "remind": False}
+        merged = rec_to_form(row)
+        merged.update({k: body[k] for k in ("frequency", "times", "weekdays", "every_n", "date", "date_kind") if k in body})
+        sched, err = schedule_to_rec(merged)
+        if err:
+            raise HTTPException(400, err)
+        if sched["frequency"] in ("as needed", "chart only"):
+            raise HTTPException(400, "Choose how often the reminder repeats")
+        db.update_medicine(mid, sched)
+        db.set_remind(mid, True)
+        return {"ok": True, "remind": True}
+
+    @app.delete("/api/medicines/{mid}", dependencies=[Depends(auth), Depends(csrf)])
+    def delete_medicine(mid: int):
+        _med_or_404(mid)
+        db.delete_medicine(mid)
+        return {"ok": True}
+
+    @app.post("/api/medicines-import", dependencies=[Depends(auth), Depends(csrf)])
+    def import_medicines(replace: bool = False, file: UploadFile = File(...)):
+        raw = file.file.read(MAX_UPLOAD + 1)
+        if len(raw) > MAX_UPLOAD:
+            raise HTTPException(413, "File is too large (2 MB max)")
+        rows, errors = read_sheet(BytesIO(raw))
+        if errors:
+            raise HTTPException(400, "; ".join(errors))
+        if replace:  # reminders of the removed medicines are cancelled by the next sync
+            db.delete_all_medicines()
+        have = {(m["name"].lower(), m["when_en"].lower()) for m in db.list_medicines()}
+        added = skipped = 0
+        for _row, rec in rows:
+            key = (rec["name"].lower(), rec["when_en"].lower())
+            if key in have:
+                skipped += 1
+                continue
+            db.add_medicine({k: v[:500] for k, v in rec.items()})
+            have.add(key)
+            added += 1
+        return {"added": added, "skipped": skipped}
+
+    # ---- sync with Wbiztool ----
+    @app.post("/api/sync/preview", dependencies=[Depends(auth), Depends(csrf)])
+    def preview():
+        if not settings.mom_number:
+            raise HTTPException(400, "Mom's number is not set (Wbiztool settings)")
+        if copy_enabled(settings, db) and not settings.my_number:
+            raise HTTPException(400, "Your number is not set (Wbiztool settings), or untick the copy option")
+        return plan_to_json(compute_plan(settings, db, planning_meds()))
+
+    @app.post("/api/sync/apply", dependencies=[Depends(auth), Depends(csrf)])
+    async def apply(request: Request):
+        body = await request.json()
+        try:
+            results = apply_plan(client, settings, db, planning_meds(), str(body.get("hash", "")))
+        except WbizError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        cache["status"] = (0, None)
+        return {"results": results}
+
+    @app.post("/api/settings", dependencies=[Depends(auth), Depends(csrf)])
+    async def set_settings(request: Request):
+        body = await request.json()
+        db.set_setting("copy_to_me", "1" if body.get("copy_to_me") else "0")
+        return {"ok": True}
+
+    # ---- Wbiztool status, test, credentials ----
     @app.get("/api/status", dependencies=[Depends(auth)])
     def status():
         ts, cached = cache["status"]
@@ -232,36 +321,14 @@ def create_app(settings=None, client=None):
                 except WbizError as exc:
                     out["whatsapp_error"] = str(exc)
         else:
-            out["error"] = "Wbiztool credentials are not set in .env"
+            out["error"] = "Wbiztool credentials are not set"
         cache["status"] = (_time.time(), out)
         return out
-
-    @app.post("/api/sync/preview", dependencies=[Depends(auth), Depends(csrf)])
-    def preview():
-        res = medicines()
-        if res.errors:
-            raise HTTPException(400, "; ".join(res.errors))
-        if not settings.mom_number:
-            raise HTTPException(400, "MOM_NUMBER is not set in .env")
-        if copy_enabled(settings, db) and not settings.my_number:
-            raise HTTPException(400, "MY_NUMBER is not set in .env (or untick the copy option)")
-        return plan_to_json(compute_plan(settings, db, res.medicines))
-
-    @app.post("/api/sync/apply", dependencies=[Depends(auth), Depends(csrf)])
-    async def apply(request: Request):
-        body = await request.json()
-        res = medicines()
-        try:
-            results = apply_plan(client, settings, db, res.medicines, str(body.get("hash", "")))
-        except WbizError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=409)
-        cache["status"] = (0, None)
-        return {"results": results}
 
     @app.post("/api/test-message", dependencies=[Depends(auth), Depends(csrf)])
     def test_message():
         if not settings.my_number:
-            return JSONResponse({"error": "MY_NUMBER is not set in .env"}, status_code=400)
+            return JSONResponse({"error": "Your number is not set"}, status_code=400)
         text = "اختبار: تذكير الدواء يعمل ✅\n" + datetime.now().strftime("%H:%M")
         try:
             client.send_message(settings.my_number, text)
@@ -271,23 +338,6 @@ def create_app(settings=None, client=None):
         db.log_event("test", True, "test message sent to my number")
         cache["status"] = (0, None)
         return {"ok": True}
-
-    @app.post("/api/settings", dependencies=[Depends(auth), Depends(csrf)])
-    async def set_settings(request: Request):
-        body = await request.json()
-        db.set_setting("copy_to_me", "1" if body.get("copy_to_me") else "0")
-        return {"ok": True}
-
-    # ---- settings (Wbiztool credentials) ----
-    def _config_view():
-        return {"client_id": settings.client_id or "", "whatsapp_client": settings.whatsapp_client,
-                "mom_number": settings.mom_number, "my_number": settings.my_number,
-                "api_key_set": bool(settings.api_key), "api_key_length": len(settings.api_key),
-                "docs_verified": settings.docs_verified}
-
-    @app.get("/settings", response_class=HTMLResponse, dependencies=[Depends(auth)])
-    def settings_page(request: Request):
-        return page(request, "settings", conf=_config_view())
 
     @app.put("/api/config", dependencies=[Depends(auth), Depends(csrf)])
     async def save_config(request: Request):
@@ -347,65 +397,6 @@ def create_app(settings=None, client=None):
             out["whatsapp_error"] = str(exc)[:200]
         return out
 
-    # ---- medicines API ----
-    def _med_or_404(mid):
-        row = db.get_medicine(mid)
-        if not row:
-            raise HTTPException(404, "Medicine not found")
-        return row
-
-    @app.get("/api/medicines/{mid}", dependencies=[Depends(auth)])
-    def get_medicine(mid: int):
-        return rec_to_form(_med_or_404(mid))
-
-    @app.post("/api/medicines", dependencies=[Depends(auth), Depends(csrf)])
-    async def add_medicine(request: Request):
-        rec, err = form_to_rec(await request.json())
-        if err:
-            raise HTTPException(400, err)
-        return {"id": db.add_medicine(rec)}
-
-    @app.put("/api/medicines/{mid}", dependencies=[Depends(auth), Depends(csrf)])
-    async def edit_medicine(mid: int, request: Request):
-        _med_or_404(mid)
-        rec, err = form_to_rec(await request.json())
-        if err:
-            raise HTTPException(400, err)
-        db.update_medicine(mid, rec)
-        return {"ok": True}
-
-    @app.post("/api/medicines/{mid}/active", dependencies=[Depends(auth), Depends(csrf)])
-    async def medicine_active(mid: int, request: Request):
-        _med_or_404(mid)
-        db.set_medicine_active(mid, bool((await request.json()).get("active")))
-        return {"ok": True}
-
-    @app.delete("/api/medicines/{mid}", dependencies=[Depends(auth), Depends(csrf)])
-    def delete_medicine(mid: int):
-        _med_or_404(mid)
-        db.delete_medicine(mid)
-        return {"ok": True}
-
-    @app.post("/api/medicines-import", dependencies=[Depends(auth), Depends(csrf)])
-    def import_medicines(file: UploadFile = File(...)):
-        raw = file.file.read(MAX_UPLOAD + 1)
-        if len(raw) > MAX_UPLOAD:
-            raise HTTPException(413, "File is too large (2 MB max)")
-        rows, errors = read_sheet(BytesIO(raw))
-        if errors:
-            raise HTTPException(400, "; ".join(errors))
-        have = {(m["name"].lower(), m["times"], m["frequency"].lower()) for m in db.list_medicines()}
-        added = skipped = 0
-        for _row, rec in rows:
-            key = (rec["name"].lower(), rec["times"], rec["frequency"].lower())
-            if key in have:
-                skipped += 1
-                continue
-            db.add_medicine({k: v[:300] for k, v in rec.items()})
-            have.add(key)
-            added += 1
-        return {"added": added, "skipped": skipped}
-
     # ---- mom: profile and status log ----
     @app.put("/api/profile", dependencies=[Depends(auth), Depends(csrf)])
     async def save_profile(request: Request):
@@ -431,14 +422,16 @@ def create_app(settings=None, client=None):
             raise HTTPException(404, "Not found")
         return {"ok": True}
 
+    @app.delete("/api/status-log", dependencies=[Depends(auth), Depends(csrf)])
+    def clear_status():
+        return {"deleted": db.clear_status()}
+
     # ---- background roll-over of one-off messages (e.g. every 28 days) ----
     def loop():
         while True:
             _time.sleep(1800)
             try:
-                res = medicines()
-                if not res.errors:
-                    rollover(client, settings, db, res.medicines)
+                rollover(client, settings, db, planning_meds())
             except Exception as exc:  # keep the thread alive
                 logging.getLogger("rollover").error("rollover failed: %s", settings.redact(type(exc).__name__))
 

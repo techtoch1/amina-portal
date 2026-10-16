@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block body %}
+{% if not configured %}
+<div class="card warn noprint">Wbiztool is not connected yet. Open <a href="#wbiz-panel" data-open="wbiz-panel">Wbiztool settings</a> below and enter the details.</div>
+{% elif not verified %}
+<div class="card warn noprint">Sending is paused until you confirm the Wbiztool endpoint paths. Open <a href="#wbiz-panel" data-open="wbiz-panel">Wbiztool settings</a>.</div>
+{% endif %}
+
+<div class="toolbar noprint">
+  <div class="seg" role="group" aria-label="Language">
+    <a class="btn small {{ 'active' if lang == 'en' }}" href="/?lang=en">English</a>
+    <a class="btn small {{ 'active' if lang == 'ar' }}" href="/?lang=ar">عربي</a>
+  </div>
+  <button class="btn primary small" id="add-med">+ Add medicine</button>
+  <label class="btn small" for="xlsx">Import Excel</label>
+  <input id="xlsx" type="file" accept=".xlsx" hidden>
+  <button class="btn small" id="print-btn">Print</button>
+</div>
+<p id="import-result" role="status" class="noprint"></p>
+
+<section class="chart" dir="{{ L.dir }}" lang="{{ lang }}">
+  <h2 class="chart-title">{% if profile.get('name') %}<bdi>{{ profile.name }}</bdi> — {% endif %}{{ L.title }}</h2>
+  <p class="muted">{{ L.updated }} <bdi>{{ updated }}</bdi>{% if profile.get('doctor') %} · {{ L.prescriber }}: <bdi>{{ profile.doctor }}</bdi>{% endif %}{% if profile.get('doctor_phone') %} · <bdi>{{ profile.doctor_phone }}</bdi>{% endif %}</p>
+  {% if profile.get('allergies') %}<p class="allergy"><strong>{{ L.allergies }}:</strong> <bdi>{{ profile.allergies }}</bdi></p>{% endif %}
+
+  {% for key in ['regular', 'as_needed'] %}
+  {% if groups[key] %}
+  <h3 class="sect">{{ L[key] }} <span class="count">{{ groups[key]|length }}</span></h3>
+  <table class="chart-table">
+    <thead><tr>{% for c in L.cols %}<th>{{ c }}</th>{% endfor %}</tr></thead>
+    <tbody>
+      {% for m in groups[key] %}
+      <tr data-id="{{ m.id }}">
+        <td data-label="{{ L.cols[0] }}" class="remind-cell">
+          <button class="bell {{ 'on' if m.remind }} noprint" data-remind="{{ m.id }}" aria-pressed="{{ 'true' if m.remind else 'false' }}"
+            aria-label="{{ L.set }}: {{ m.name }}">🔔</button>
+          <div class="remind-text">{% if m.remind %}{{ m.remind_text }}{% if m.next %}<div class="muted">{{ L.next }}: {{ m.next.strftime('%d %b') }}</div>{% endif %}{% else %}<span class="muted">{{ L.off }}</span>{% endif %}</div>
+        </td>
+        <td data-label="{{ L.cols[1] }}"><button class="namebtn" data-edit="{{ m.id }}" dir="auto"><strong>{{ m.name }}</strong></button>{% if m.form %}<div class="muted" dir="auto">{{ m.form }}</div>{% endif %}</td>
+        <td data-label="{{ L.cols[2] }}" dir="auto">{{ m.dose }}</td>
+        <td data-label="{{ L.cols[3] }}" dir="auto">{{ m.when }}</td>
+        <td data-label="{{ L.cols[4] }}" dir="auto">{{ m.purpose }}</td>
+        <td data-label="{{ L.cols[5] }}" dir="auto">{{ m.notes }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% endfor %}
+  {% if not total %}<p class="muted">{{ L.empty }}</p>{% endif %}
+  {% if profile.get('notes') %}<p class="chart-note" dir="auto">{{ profile.notes }}</p>{% endif %}
+</section>
+
+{% if pending %}
+<div class="applybar noprint">
+  <span><strong>{{ pending }}</strong> reminder change{{ 's' if pending != 1 }} waiting</span>
+  <button class="btn primary" id="review-btn">Review &amp; apply</button>
+</div>
+{% endif %}
+
+<details class="card noprint" id="mom-panel">
+  <summary>Mom — profile &amp; status log</summary>
+  <h3>Log her status</h3>
+  <form id="status-form" class="stack">
+    <label>What <select name="kind">{% for k in kinds %}<option>{{ k }}</option>{% endfor %}</select></label>
+    <label>Value <input name="value" maxlength="80" placeholder="e.g. 130/80, 112 mg/dL" dir="auto"></label>
+    <label>Note <input name="note" maxlength="500" dir="auto"></label>
+    <p id="status-error" class="err" role="alert"></p>
+    <button class="btn primary" type="submit">Add to log</button>
+  </form>
+  {% if log %}
+  <ul class="plain log">
+    {% for row in log %}
+    <li><strong>{{ row.kind }}</strong> · <span dir="auto">{{ row.value }}{% if row.note %} — {{ row.note }}{% endif %}</span>
+      <span class="muted">{{ row.ts|local }}</span>
+      <button class="link danger" data-del-status="{{ row.id }}" aria-label="Delete entry">delete</button></li>
+    {% endfor %}
+  </ul>
+  <button class="link danger" id="clear-log">Clear the whole log</button>
+  {% endif %}
+  <h3>Profile</h3>
+  <form id="profile-form" class="stack">
+    <label>Name <input name="name" value="{{ profile.get('name','') }}" maxlength="120" dir="auto"></label>
+    <label>Age / date of birth <input name="age" value="{{ profile.get('age','') }}" maxlength="40"></label>
+    <label>Conditions <textarea name="conditions" rows="2" maxlength="1000" dir="auto">{{ profile.get('conditions','') }}</textarea></label>
+    <label>Allergies <textarea name="allergies" rows="2" maxlength="1000" dir="auto">{{ profile.get('allergies','') }}</textarea></label>
+    <label>Doctor <input name="doctor" value="{{ profile.get('doctor','') }}" maxlength="120" dir="auto"></label>
+    <label>Doctor / clinic phone <input name="doctor_phone" value="{{ profile.get('doctor_phone','') }}" maxlength="40" inputmode="tel"></label>
+    <label>Emergency contact <input name="emergency_contact" value="{{ profile.get('emergency_contact','') }}" maxlength="200" dir="auto"></label>
+    <label>Pharmacy <input name="pharmacy" value="{{ profile.get('pharmacy','') }}" maxlength="200" dir="auto"></label>
+    <label>Note shown under the table <textarea name="notes" rows="3" maxlength="2000" dir="auto">{{ profile.get('notes','') }}</textarea></label>
+    <p id="profile-result" role="status"></p>
+    <button class="btn primary" type="submit">Save profile</button>
+  </form>
+</details>
+
+<details class="card noprint" id="wbiz-panel">
+  <summary>Wbiztool settings <span id="wb-status" class="muted"></span></summary>
+  <form id="conf-form" class="stack" autocomplete="off">
+    <label>Client ID (number) <input name="client_id" value="{{ conf.client_id }}" inputmode="numeric" maxlength="12"></label>
+    <label>API key
+      <input name="api_key" type="password" autocomplete="new-password" spellcheck="false" maxlength="300"
+        placeholder="{{ '•••••• saved (' ~ conf.api_key_length ~ ' characters) — leave blank to keep' if conf.api_key_set else 'Paste the API key' }}"></label>
+    <label>WhatsApp client <input name="whatsapp_client" value="{{ conf.whatsapp_client }}" maxlength="64" spellcheck="false"></label>
+    <label>Mom's WhatsApp number (with country code) <input name="mom_number" value="{{ conf.mom_number }}" inputmode="tel" maxlength="30" placeholder="96170123456"></label>
+    <label>Your WhatsApp number (copies and test message) <input name="my_number" value="{{ conf.my_number }}" inputmode="tel" maxlength="30" placeholder="96170123456"></label>
+    <label class="check"><input type="checkbox" name="docs_verified" {{ 'checked' if conf.docs_verified }}>
+      I checked the Wbiztool endpoint paths in <code>app/wbiztool.py</code> against their docs — allow creating reminders and sending messages</label>
+    <p id="conf-result" role="status"></p>
+    <div class="row">
+      <button class="btn primary" type="submit">Save</button>
+      <button class="btn" type="button" id="conf-test">Save &amp; test connection</button>
+      <button class="btn" type="button" id="test-btn">Send test message to my number</button>
+    </div>
+    <p id="test-result" role="status"></p>
+  </form>
+  <h3>Recent activity</h3>
+  <ul class="plain">
+    {% for e in events %}<li class="{{ 'ok' if e.ok else 'bad' }}">{{ '✔' if e.ok else '✖' }} {{ e.ts|local }} · {{ e.kind }} · {{ e.detail }}</li>
+    {% else %}<li class="muted">Nothing yet.</li>{% endfor %}
+  </ul>
+</details>
+
+<dialog id="med-dialog">
+  <form id="med-form" method="dialog">
+    <h2 id="med-title">Add medicine</h2>
+    <label>Name<input name="name" required maxlength="120" dir="auto"></label>
+    <div class="two">
+      <label>Dose<input name="dose" maxlength="80" placeholder="e.g. 500 mg" dir="auto"></label>
+      <label>Form<input name="form" maxlength="60" placeholder="Tablet, Injection…" dir="auto"></label>
+    </div>
+    <label>Type
+      <select name="section"><option value="regular">Regular</option><option value="as_needed">As needed (no reminders)</option></select></label>
+    <fieldset><legend>English</legend>
+      <label>When to take <input name="when_en" maxlength="300" placeholder="e.g. Twice daily (morning &amp; evening)" dir="auto"></label>
+      <label>What it is for <input name="purpose" maxlength="200" dir="auto"></label>
+      <label>Notes <textarea name="notes_en" rows="2" maxlength="500" dir="auto"></textarea></label>
+    </fieldset>
+    <fieldset><legend>العربية</legend>
+      <label>How to take — also sent in the WhatsApp reminder
+        <input name="instruction" maxlength="300" dir="rtl" lang="ar" placeholder="حبة صباحاً ومساءً"></label>
+      <label>What it is for <input name="purpose_ar" maxlength="200" dir="rtl" lang="ar"></label>
+      <label>Notes <textarea name="notes_ar" rows="2" maxlength="500" dir="rtl" lang="ar"></textarea></label>
+    </fieldset>
+    <p id="med-error" class="err" role="alert"></p>
+    <div class="row">
+      <button class="btn primary" type="submit" id="med-save">Save</button>
+      <button class="btn" type="button" id="med-cancel">Cancel</button>
+      <button class="btn danger" type="button" id="med-delete" hidden>Delete</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="rem-dialog">
+  <form id="rem-form" method="dialog">
+    <h2 id="rem-title">Reminder</h2>
+    <p class="muted" id="rem-hint" dir="auto"></p>
+    <label>Repeats
+      <select name="frequency">
+        <option value="">Choose…</option>
+        <option value="daily">Every day</option>
+        <option value="weekly">Certain days of the week</option>
+        <option value="every_n">Every N days (e.g. injection)</option>
+      </select></label>
+    <div id="r-weekly" hidden><span class="muted">Days</span>
+      <div class="days">{% for d in day_names %}<label class="check"><input type="checkbox" name="wd" value="{{ loop.index0 }}">{{ d }}</label>{% endfor %}</div></div>
+    <div id="r-everyn" hidden>
+      <label>Every <input name="every_n" type="number" min="1" max="365" inputmode="numeric" class="short"> days</label>
+      <label>Date <input name="date" type="date"></label>
+      <label>That date is the <select name="date_kind"><option value="start">next dose</option><option value="last">last dose already taken</option></select></label></div>
+    <div><span class="muted">Times — a WhatsApp message is sent at each</span>
+      <div id="r-times"></div>
+      <div class="row">
+        <button type="button" class="btn small" data-preset="08:00">Morning 08:00</button>
+        <button type="button" class="btn small" data-preset="13:00">Noon 13:00</button>
+        <button type="button" class="btn small" data-preset="20:00">Evening 20:00</button>
+        <button type="button" class="btn small" data-preset="22:00">Bedtime 22:00</button>
+        <button type="button" class="btn small" id="r-add-time">+ Other</button>
+      </div>
+      <p class="muted">The buttons only fill in a time you can change. Use the times from the prescription.</p></div>
+    <p id="rem-error" class="err" role="alert"></p>
+    <div class="row">
+      <button class="btn primary" type="submit" id="rem-save">Turn reminder on</button>
+      <button class="btn danger" type="button" id="rem-off" hidden>Turn off</button>
+      <button class="btn" type="button" id="rem-cancel">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="review-dialog">
+  <h2>Review reminders</h2>
+  <p class="muted">Wbiztool reminders can't be edited, so a change cancels the old one and creates a new one.</p>
+  <label class="check"><input type="checkbox" id="copy" {{ 'checked' if copy }}> Also send a copy of each reminder to my number</label>
+  <p id="plan-error" class="err" role="alert"></p>
+  <div id="plan" hidden>
+    <h3>To cancel (<span id="n-cancel">0</span>)</h3><ul class="plan" id="cancel-list"></ul>
+    <h3>To create (<span id="n-create">0</span>)</h3><ul class="plan" id="create-list"></ul>
+    <label class="check"><input type="checkbox" id="approve"> I reviewed this list and approve it</label>
+  </div>
+  <ul class="plain" id="apply-result"></ul>
+  <div class="row">
+    <button class="btn primary" id="apply-btn" disabled>Apply to Wbiztool</button>
+    <button class="btn" id="review-close">Close</button>
+  </div>
+</dialog>
+{% endblock %}

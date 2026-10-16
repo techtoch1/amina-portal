@@ -23,6 +23,7 @@ HEADERS = {
     "instruction": ["instruction", "instructions", "arabic", "بالعربي", "التعليمات", "تعليمات", "الارشادات", "متى يؤخذ"],
     "purpose": ["purpose", "for", "used for", "indication", "what for"],
     "purpose_ar": ["purpose (arabic)", "for (arabic)", "الغرض", "الاستخدام", "لماذا", "دواعي الاستعمال"],
+    "form": ["form", "dosage form", "type"],
     "when_en": ["when to take", "when", "how to take", "directions", "how often"],
     "notes_en": ["notes", "note", "comments", "remarks"],
     "notes_ar": ["notes (arabic)", "ملاحظات", "ملاحظه"],
@@ -68,6 +69,8 @@ class Medicine:
     purpose_ar: str = ""
     notes_en: str = ""
     notes_ar: str = ""
+    form: str = ""
+    remind: bool = False
 
 
 @dataclass
@@ -266,12 +269,12 @@ def parse_row(row_no, rec):
         purpose=_text(rec.get("purpose")), kind=kind, times=times, weekdays=weekdays,
         every_n=n if kind == "every_n" else None, anchor=anchor,
         when_en=_text(rec.get("when_en")), purpose_ar=_text(rec.get("purpose_ar")),
-        notes_en=_text(rec.get("notes_en")), notes_ar=_text(rec.get("notes_ar")),
+        notes_en=_text(rec.get("notes_en")), notes_ar=_text(rec.get("notes_ar")), form=_text(rec.get("form")),
     )
 
 
 FIELDS = ["name", "dose", "times", "frequency", "day", "start_date", "last_date", "instruction", "purpose",
-          "when_en", "purpose_ar", "notes_en", "notes_ar"]
+          "when_en", "purpose_ar", "notes_en", "notes_ar", "form"]
 
 
 def cell_text(v):
@@ -293,6 +296,7 @@ def cell_text(v):
     return str(v).strip()
 
 
+_ARABIC = re.compile("[\u0600-\u06ff]")
 AS_NEEDED_HEADS = ["as needed", "prn", "عند الحاجه"]
 REGULAR_HEADS = ["regular", "scheduled", "منتظم"]
 
@@ -341,11 +345,15 @@ def read_sheet(source):
                 continue
             if low.startswith(("note", "ملاحظ")) or len(low) > 60:
                 continue
+        if rec["dose"] in ("—", "–", "-"):
+            rec["dose"] = ""
+        if rec["notes_en"] and _ARABIC.search(rec["notes_en"]) and not re.search("[A-Za-z]", rec["notes_en"]):
+            rec["notes_ar"], rec["notes_en"] = rec["notes_ar"] or rec["notes_en"], ""  # Arabic-only note
         if not rec["frequency"]:
-            if section == "as_needed":
+            # what the text says wins; the section heading is only the fallback
+            rec["frequency"] = infer_frequency(rec["when_en"]) if rec["when_en"] else ""
+            if not rec["frequency"] and section == "as_needed":
                 rec["frequency"] = "as needed"
-            elif rec["when_en"]:
-                rec["frequency"] = infer_frequency(rec["when_en"])
         out.append((offset, rec))
     return out, []
 
@@ -372,6 +380,8 @@ def load_from_db(db):
             stopped.append(r)
             continue
         item = parse_row(r["id"], {f: r[f] for f in FIELDS})
+        if isinstance(item, Medicine):
+            item.remind = bool(r.get("remind"))
         (result.medicines if isinstance(item, Medicine) else result.review).append(item)
     return result, stopped
 
@@ -380,17 +390,24 @@ def load_from_db(db):
 
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+TEXT_LIMITS = {"name": 120, "dose": 80, "form": 60, "when_en": 300, "purpose": 200, "notes_en": 500,
+               "instruction": 300, "purpose_ar": 200, "notes_ar": 500}
 
 
-def form_to_rec(data):
-    """Validate the add/edit form. Returns (rec, error|None)."""
-    def s(key, limit):
-        return str(data.get(key) or "").strip()[:limit]
-
-    name = s("name", 120)
-    if not name:
+def details_from_form(data, require_name=True):
+    """The descriptive fields (everything except the reminder schedule). Returns (dict, error)."""
+    out = {}
+    for key, limit in TEXT_LIMITS.items():
+        if key in data:
+            out[key] = str(data.get(key) or "").strip()[:limit]
+    if require_name and not out.get("name"):
         return None, "Medicine name is required"
-    freq = s("frequency", 20)
+    return out, None
+
+
+def schedule_to_rec(data):
+    """Strictly validated reminder schedule. Returns (fields, error)."""
+    freq = str(data.get("frequency") or "").strip()
     if freq not in ("daily", "weekly", "every_n", "as_needed", "chart_only"):
         return None, "Choose how often the medicine is taken"
     times = []
@@ -402,10 +419,7 @@ def form_to_rec(data):
         if not times:
             return None, "Add at least one time"
         times = sorted(set(times))
-    rec = {"name": name, "dose": s("dose", 80), "times": ", ".join(times), "frequency": "", "day": "",
-           "start_date": "", "last_date": "", "instruction": s("instruction", 300), "purpose": s("purpose", 200),
-           "when_en": s("when_en", 300), "purpose_ar": s("purpose_ar", 200),
-           "notes_en": s("notes_en", 500), "notes_ar": s("notes_ar", 500)}
+    rec = {"times": ", ".join(times), "frequency": "", "day": "", "start_date": "", "last_date": ""}
     if freq == "daily":
         rec["frequency"] = "daily"
     elif freq == "as_needed":
@@ -433,17 +447,27 @@ def form_to_rec(data):
     return rec, None
 
 
+def form_to_rec(data):
+    """Details + schedule in one go (used when both are submitted together)."""
+    details, err = details_from_form(data)
+    if err:
+        return None, err
+    sched, err = schedule_to_rec(data)
+    if err:
+        return None, err
+    return {**{k: "" for k in TEXT_LIMITS}, **details, **sched}, None
+
+
 def rec_to_form(rec):
-    """Stored record -> values for the edit form (best effort for imported rows)."""
+    """Stored record -> values for the edit/reminder forms (best effort for imported rows)."""
     kind, n, _ = classify_frequency(norm(rec.get("frequency")))
     times, _p = parse_times(rec.get("times") or None)
-    return {
-        "name": rec.get("name", ""), "dose": rec.get("dose", ""), "times": times,
-        "frequency": kind or "", "every_n": n or "",
+    out = {k: rec.get(k, "") for k in TEXT_LIMITS}
+    out.update({
+        "times": times, "frequency": kind or "", "every_n": n or "",
         "weekdays": find_weekdays(norm(rec.get("day"))) or (find_weekdays(norm(rec.get("frequency"))) if kind == "weekly" else []),
         "date": rec.get("start_date") or rec.get("last_date") or "",
         "date_kind": "last" if (rec.get("last_date") and not rec.get("start_date")) else "start",
-        "instruction": rec.get("instruction", ""), "purpose": rec.get("purpose", ""),
-        "when_en": rec.get("when_en", ""), "purpose_ar": rec.get("purpose_ar", ""),
-        "notes_en": rec.get("notes_en", ""), "notes_ar": rec.get("notes_ar", ""),
-    }
+        "remind": bool(rec.get("remind")),
+    })
+    return out
