@@ -45,6 +45,7 @@ class Settings:
     port: int = 8000
     docs_verified: bool = False
     base_url: str = "https://wbiztool.com/api/v1"
+    schedule_format: str = ""  # the date format Wbiztool accepted for one-off messages (learned)
 
     @property
     def wbiz_configured(self):
@@ -107,6 +108,7 @@ class Settings:
             v = g("conf." + attr)
             if v is not None:
                 setattr(self, attr, v)
+        self.schedule_format = g("wbiz.schedule_format") or ""
         v = g("conf.docs_verified")
         if v is not None:
             self.docs_verified = v == "1"

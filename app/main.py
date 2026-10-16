@@ -97,6 +97,7 @@ def create_app(settings=None, client=None):
     db = DB(settings.db_path)
     settings.apply_overrides(db)
     client = client or WbizClient(settings)
+    client.remember = lambda fmt: db.set_setting("wbiz.schedule_format", fmt)
     for handler in logging.getLogger().handlers:
         handler.addFilter(_Redact(settings))
     logging.getLogger("wbiztool").addFilter(_Redact(settings))

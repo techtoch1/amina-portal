@@ -173,7 +173,7 @@ def test_reminders_are_sent_with_a_name(settings):
     assert first["name"] == first["reminder_name"] == "Meds 08:00 - Valtrex, Ator"
     assert first["message_template"] == first["template"] == first["msg"] == "رسالة"
     assert first["phone"] == first["phone_number"] == "96170000001" and first["cron"] == "0 8 * * *" and first["timezone"] == "Asia/Beirut"
-    assert spy.sent[1][1]["schedule_time"] == "2026-11-17 10:00" and spy.sent[2][1]["msg"] == "test"
+    assert spy.sent[1][1]["schedule_time"] == "2026-11-17 10:00:00"  # first format tried and spy.sent[2][1]["msg"] == "test"
     spy.create_reminder("96170000001", "msg", "0 8 * * *", "Asia/Beirut")  # a default name is always supplied
     assert spy.sent[-1][1]["name"] == "Medicine reminder"
 
@@ -195,3 +195,58 @@ def test_message_includes_arabic_purpose_only():
     assert "الغرض" not in build_message([m], with_purpose=False)
     m.purpose_ar = ""  # no Arabic -> no line, and never the English purpose
     assert "الغرض" not in build_message([m]) and "Antiviral" not in build_message([m])
+
+
+def test_schedule_date_format_is_discovered_and_remembered(settings):
+    class Fussy(WbizClient):
+        accepted = "%d-%m-%Y %H:%M"
+
+        def __init__(self, s):
+            super().__init__(s)
+            self.values = []
+
+        def _post(self, path, fields=None):
+            self.values.append(fields["schedule_time"])
+            if fields["schedule_time"] != "29-10-2026 08:00":
+                raise WbizError("/schedule_msg/ failed (status=0): Scheduled date & time is not in valid format")
+            return {"status": 1, "msg_id": "m1"}
+
+    saved = []
+    c = Fussy(settings)
+    c.remember = saved.append
+    assert c.schedule_message("96170000001", "x", "2026-10-29 08:00", "Asia/Beirut", "n") == "m1"
+    assert c.values[:3] == ["2026-10-29 08:00:00", "2026-10-29T08:00:00", "2026-10-29T08:00"] and c.values[-1] == "29-10-2026 08:00"
+    assert saved == ["%d-%m-%Y %H:%M"] and settings.schedule_format == "%d-%m-%Y %H:%M"
+    c.values.clear()
+    c.schedule_message("96170000001", "x", "2026-10-29 08:00", "Asia/Beirut", "n")
+    assert c.values == ["29-10-2026 08:00"]  # the remembered format goes first: one call, no retries
+    assert saved == ["%d-%m-%Y %H:%M"]
+
+    class Nope(WbizClient):
+        calls = 0
+
+        def _post(self, path, fields=None):
+            Nope.calls += 1
+            raise WbizError("/schedule_msg/ failed (status=0): Phone cannot be null")
+
+    n = Nope(settings)
+    settings.schedule_format = ""
+    try:
+        n.schedule_message("1", "x", "2026-10-29 08:00", "Asia/Beirut")
+        assert False
+    except WbizError as e:
+        assert "Phone cannot be null" in str(e)
+    assert Nope.calls == 1  # unrelated errors are not retried with other date formats
+
+    class Never(WbizClient):
+        def _post(self, path, fields=None):
+            raise WbizError("Scheduled date & time is not in valid format")
+
+    try:
+        Never(settings).schedule_message("1", "x", "2026-10-29 08:00", "Asia/Beirut")
+        assert False
+    except WbizError as e:
+        assert "tried 9 date formats" in str(e)
+    from datetime import datetime as _dt
+    assert WbizClient(settings)._format_schedule("2026-10-29 08:00", "epoch", "Asia/Beirut") == str(
+        int(_dt(2026, 10, 29, 6, 0, tzinfo=__import__("datetime").timezone.utc).timestamp()))  # Beirut is UTC+2 after DST ends (25 Oct)

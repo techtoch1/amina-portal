@@ -16,6 +16,8 @@ Rules baked in:
 """
 import logging
 import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -52,6 +54,11 @@ ALIASES = {
     "cron": ("cron_expression", "schedule"),
     "timezone": ("time_zone", "tz"),
 }
+# Wbiztool answered "Scheduled date & time is not in valid format" for "2026-10-29 08:00", but never says
+# which format it wants. A rejected date creates nothing, so the formats are tried in turn until one is
+# accepted; the winner is remembered. "epoch" = Unix seconds for the local time.
+SCHEDULE_FORMATS = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%d-%m-%Y %H:%M", "%d/%m/%Y %H:%M",
+                    "%Y-%m-%d %H:%M", "%d-%m-%Y %H:%M:%S", "%m/%d/%Y %H:%M", "epoch"]
 # keys searched (recursively) in a response to find the id of a created item
 ID_KEYS = ("reminder_id", "msg_id", "message_id", "id")
 
@@ -86,6 +93,7 @@ class WbizClient:
     def __init__(self, settings, session=None):
         self.s = settings
         self.http = session or requests.Session()
+        self.remember = None  # optional callback(format) to persist the accepted date format
 
     # ---- plumbing ----
     def _require_config(self):
@@ -173,11 +181,36 @@ class WbizClient:
         self._require_verified()
         self._post(PATHS["reminder_cancel"], {FIELDS["reminder_id"]: remote_id})
 
+    def _format_schedule(self, fire_at, fmt, tz):
+        when = datetime.strptime(fire_at, "%Y-%m-%d %H:%M")
+        if fmt == "epoch":
+            return str(int(when.replace(tzinfo=ZoneInfo(tz)).timestamp()))
+        return when.strftime(fmt)
+
     def schedule_message(self, phone, message, fire_at, tz, name=""):
+        """fire_at: 'YYYY-MM-DD HH:MM' local time. Tries date formats until Wbiztool accepts one."""
         self._require_verified()
-        data = self._post(PATHS["schedule_msg"], self._fields(
-            name=name or "Medicine reminder", phone=phone, message=message, schedule_time=fire_at, timezone=tz))
-        return _find_id(data)
+        preferred = getattr(self.s, "schedule_format", "")
+        order = ([preferred] if preferred in SCHEDULE_FORMATS else []) + [f for f in SCHEDULE_FORMATS if f != preferred]
+        tried, last = [], None
+        for fmt in order:
+            try:
+                data = self._post(PATHS["schedule_msg"], self._fields(
+                    name=name or "Medicine reminder", phone=phone, message=message,
+                    schedule_time=self._format_schedule(fire_at, fmt, tz), timezone=tz))
+            except WbizError as exc:
+                if "format" not in str(exc).lower():  # a different problem: retrying the date can't help
+                    raise
+                tried.append(fmt)
+                last = exc
+                continue
+            if fmt != preferred:
+                self.s.schedule_format = fmt
+                if self.remember:
+                    self.remember(fmt)
+                log.info("wbiztool accepted schedule date format %s", fmt)
+            return _find_id(data)
+        raise WbizError(f"{last} (tried {len(tried)} date formats: " + ", ".join(tried) + ")")
 
     def cancel_scheduled(self, remote_id):
         self._require_verified()
