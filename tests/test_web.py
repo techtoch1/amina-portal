@@ -120,3 +120,18 @@ def test_settings_page(settings):
     s2 = Settings(data_dir=settings.data_dir)
     s2.apply_overrides(DB(settings.db_path))
     assert s2.client_id == 7 and s2.api_key == "S3CRET-KEY_value"
+
+
+def test_status_failure_does_not_hide_good_credentials(settings):
+    from app.wbiztool import WbizError
+
+    class NoStatus(FakeClient):
+        def client_status(self):
+            raise WbizError("Non-JSON response from /whatsapp_client/status/ (HTTP 404): Page not found")
+
+    c = TestClient(create_app(settings, NoStatus(settings)), base_url="http://testserver")
+    h = login(c, settings)
+    r = c.post("/api/config/test", headers=h).json()
+    assert r["ok"] and "404" in r["whatsapp_error"]
+    st = c.get("/api/status").json()
+    assert st["error"] is None and "404" in st["whatsapp_error"]

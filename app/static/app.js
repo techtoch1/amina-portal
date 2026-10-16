@@ -126,7 +126,10 @@
       show(true, 'Saving and testing…');
       if (!(await save())) return;
       const {ok, data} = await call('POST', '/api/config/test');
-      show(ok, ok ? 'Connected ✔ WhatsApp: ' + (typeof data.whatsapp === 'string' ? data.whatsapp : JSON.stringify(data.whatsapp)) : 'Failed: ' + data.error);
+      if (!ok) return show(false, 'Failed: ' + data.error);
+      show(true, 'Credentials OK ✔' + (data.account ? ' (' + data.account + ')' : '') +
+        (data.whatsapp_error ? ' — but the WhatsApp status check failed: ' + data.whatsapp_error.slice(0, 120) :
+          ' · WhatsApp: ' + (typeof data.whatsapp === 'string' ? data.whatsapp : JSON.stringify(data.whatsapp))));
     };
   }
 
@@ -143,7 +146,8 @@
         return;
       }
       const wa = s.whatsapp || {};
-      box.textContent = 'Credentials OK · WhatsApp: ' + (wa.data ? JSON.stringify(wa.data) : (wa.message || 'ok'));
+      box.textContent = 'Credentials OK' + (s.whatsapp_error ? ' · WhatsApp status unavailable (the status path in app/wbiztool.py needs checking)' :
+        ' · WhatsApp: ' + (wa.data ? JSON.stringify(wa.data) : (wa.message || 'ok')));
       box.className = 'ok';
     }).catch(() => { $('wb-status').textContent = 'Could not load status'; });
 

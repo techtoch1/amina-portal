@@ -1,5 +1,6 @@
 """python -m app.cli check  -> inspect the Wbiztool settings (never prints the key) and call /me/
    python -m app.cli me     -> just call /me/
+   python -m app.cli probe  -> try likely read-only "status" paths and show which ones exist
    python -m app.cli plan   -> print every reminder a sync would create (no network)
    python -m app.cli import FILE.xlsx -> add medicines from an Excel file
 
@@ -43,6 +44,20 @@ def main(argv):
         except WbizError as exc:
             print("/me/ FAILED:", exc)
             return 1
+        return 0
+    if cmd == ["probe"]:
+        client = WbizClient(s)
+        paths = ["/me/", "/whatsapp_client/status/", "/whatsapp_client/", "/whatsapp_clients/",
+                 "/whatsapp_client/list/", "/whatsapp_client/info/", "/whatsapp_client/me/",
+                 "/client/status/", "/status/", "/whatsapp/status/", "/whatsapp_status/"]
+        for path in paths:
+            try:
+                code, status, msg = client.probe(path)
+            except WbizError as exc:
+                print(exc)
+                return 1
+            mark = "FOUND " if code and code != 404 else "no     "
+            print(f"{mark}{path:28} HTTP {code}  status={status}  {msg}")
         return 0
     if cmd == ["plan"]:
         res, _stopped = load_from_db(DB(s.db_path))

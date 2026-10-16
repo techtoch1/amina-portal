@@ -183,9 +183,13 @@ def create_app(settings=None, client=None):
         if settings.wbiz_configured:
             try:
                 out["me"] = client.me()
-                out["whatsapp"] = client.client_status()
             except WbizError as exc:
                 out["error"] = str(exc)
+            else:
+                try:
+                    out["whatsapp"] = client.client_status()
+                except WbizError as exc:
+                    out["whatsapp_error"] = str(exc)
         else:
             out["error"] = "Wbiztool credentials are not set in .env"
         cache["status"] = (_time.time(), out)
@@ -291,11 +295,16 @@ def create_app(settings=None, client=None):
         if not settings.wbiz_configured:
             return JSONResponse({"error": "Enter the client ID, API key and WhatsApp client first"}, status_code=400)
         try:
-            client.me()
-            wa = client.client_status()
+            me = client.me()
         except WbizError as exc:
             return JSONResponse({"error": str(exc)}, status_code=502)
-        return {"ok": True, "whatsapp": wa.get("data") or wa.get("message") or "ok"}
+        out = {"ok": True, "account": str(me.get("name") or "")}
+        try:
+            wa = client.client_status()
+            out["whatsapp"] = wa.get("data") or wa.get("message") or "ok"
+        except WbizError as exc:  # credentials are fine; only the status page failed
+            out["whatsapp_error"] = str(exc)[:200]
+        return out
 
     # ---- medicines API ----
     def _med_or_404(mid):

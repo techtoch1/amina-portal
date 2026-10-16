@@ -114,6 +114,24 @@ class WbizClient:
         log.info("wbiztool %s ok", path)
         return data
 
+    def probe(self, path):
+        """Read-only diagnostic: POST the auth body to `path`, never raise.
+        Returns (http_status, json_status_or_None, message_snippet)."""
+        self._require_config()
+        body = {"client_id": int(self.s.client_id), "api_key": _s(self.s.api_key),
+                "whatsapp_client": _s(self.s.whatsapp_client)}
+        try:
+            resp = self.http.post(self.s.base_url.rstrip("/") + path, json=body, timeout=20)
+        except requests.RequestException as exc:
+            return None, None, type(exc).__name__
+        try:
+            data = resp.json()
+        except ValueError:
+            return resp.status_code, None, "not JSON (page not found?)" if resp.status_code == 404 else "not JSON"
+        text = self.s.redact(str(data))[:160] if not isinstance(data, dict) else self.s.redact(
+            str(data.get("message") or data.get("data") or data))[:160]
+        return resp.status_code, (data.get("status") if isinstance(data, dict) else None), text
+
     # ---- read-only (always allowed) ----
     def me(self):
         return self._post(PATHS["me"])
