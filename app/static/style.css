@@ -178,3 +178,11 @@ body.login{display:grid;place-items:center;min-height:100vh;padding:20px}
 
 .applybar .btn{width:auto}
 @media (max-width:760px){.applybar{flex-wrap:nowrap}.applybar span{font-size:.95rem}}
+
+.fb{color:var(--muted);font-style:italic}
+.fb::after{content:" ·EN";font-size:.7rem;font-style:normal;opacity:.7}
+#arabic-filled ul,#arabic-missing ul{list-style:none;padding:0;margin:.3rem 0}
+#arabic-filled li,#arabic-missing li{padding:8px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap}
+#arabic-filled li:last-child,#arabic-missing li:last-child{border:0}
+.ar-val{unicode-bidi:plaintext;font-size:1.05rem}
+@media print{.fb::after{display:none}}

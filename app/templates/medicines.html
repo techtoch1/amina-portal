@@ -7,6 +7,13 @@
 <div class="notice warn noprint">Sending is paused until you confirm the Wbiztool endpoint paths. <a href="/settings">Open Settings →</a></div>
 {% endif %}
 
+{% if arabic_missing %}
+<div class="notice info noprint" id="arabic-notice">
+  <span><strong>{{ arabic_missing }} Arabic detail{{ 's are' if arabic_missing != 1 else ' is' }} missing</strong> (what it is for, notes or form). The Arabic page shows English for these.</span>
+  <button class="btn primary" id="arabic-fill">Fill missing Arabic</button>
+</div>
+{% endif %}
+
 <div class="pagehead noprint">
   <div>
     <h1>Medicines</h1>
@@ -47,11 +54,11 @@
             {% else %}<span class="muted">{{ L.off }}</span>{% endif %}
           </div>
         </td>
-        <td data-label="{{ L.cols[1] }}"><button class="namebtn" data-edit="{{ m.id }}" dir="auto"><strong>{{ m.name }}</strong></button>{% if m.form %}<div class="muted" dir="auto">{{ m.form }}</div>{% endif %}</td>
+        <td data-label="{{ L.cols[1] }}"><button class="namebtn" data-edit="{{ m.id }}" dir="auto"><strong>{{ m.name }}</strong></button>{% if m.form %}<div class="muted {{ 'fb' if m.fb.form }}" dir="auto"{% if m.fb.form %} title="Not in Arabic yet"{% endif %}>{{ m.form }}</div>{% endif %}</td>
         <td data-label="{{ L.cols[2] }}" dir="auto">{{ m.dose }}</td>
-        <td data-label="{{ L.cols[3] }}" dir="auto">{{ m.when }}</td>
-        <td data-label="{{ L.cols[4] }}" dir="auto">{{ m.purpose }}</td>
-        <td data-label="{{ L.cols[5] }}" dir="auto">{{ m.notes }}</td>
+        <td data-label="{{ L.cols[3] }}" dir="auto" class="{{ 'fb' if m.fb.when }}">{{ m.when }}</td>
+        <td data-label="{{ L.cols[4] }}" dir="auto" class="{{ 'fb' if m.fb.purpose }}"{% if m.fb.purpose %} title="Not in Arabic yet"{% endif %}>{{ m.purpose }}</td>
+        <td data-label="{{ L.cols[5] }}" dir="auto" class="{{ 'fb' if m.fb.notes }}"{% if m.fb.notes %} title="Not in Arabic yet"{% endif %}>{{ m.notes }}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -85,6 +92,7 @@
       <label>Notes <textarea name="notes_en" rows="2" maxlength="500" dir="auto"></textarea></label>
     </fieldset>
     <fieldset><legend>العربية</legend>
+      <label>Form <input name="form_ar" maxlength="60" dir="rtl" lang="ar" placeholder="أقراص، حقنة…"></label>
       <label>How to take — also sent in the WhatsApp reminder
         <input name="instruction" maxlength="300" dir="rtl" lang="ar" placeholder="حبة صباحاً ومساءً"></label>
       <label>What it is for <input name="purpose_ar" maxlength="200" dir="rtl" lang="ar"></label>
@@ -97,6 +105,14 @@
       <button class="btn danger" type="button" id="med-delete" hidden>Delete</button>
     </div>
   </form>
+</dialog>
+
+<dialog id="arabic-dialog">
+  <h2>Arabic fill result</h2>
+  <p class="muted">Only empty Arabic fields were filled, from a built-in glossary. Please read them over — everything stays editable.</p>
+  <div id="arabic-filled"></div>
+  <div id="arabic-missing"></div>
+  <div class="row"><button class="btn primary" id="arabic-close">Done</button></div>
 </dialog>
 
 <dialog id="rem-dialog">

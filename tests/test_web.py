@@ -309,3 +309,45 @@ def test_status_failure_does_not_hide_good_credentials(settings):
     assert r["ok"] and "404" in r["whatsapp_error"]
     st = c.get("/api/status").json()
     assert st["error"] is None and "404" in st["whatsapp_error"]
+
+
+def test_fill_missing_arabic(settings, tmp_path):
+    c = make(settings)
+    h = login(c, settings)
+    imported(c, h, tmp_path)
+    # imitate an older import: an Arabic-only note sitting in the English notes box
+    c.post("/api/medicines", json={"name": "Imod", "dose": "2 mg", "form": "Tablet", "purpose": "Diarrhoea", "notes_en": "اسهال",
+                                   "when_en": "when needed", "instruction": "حبة عند الضرورة", "section": "as_needed"}, headers=h)
+    c.post("/api/medicines", json={"name": "Odd", "form": "Tablet", "purpose": "Mystery purpose", "notes_en": "Take with orange juice",
+                                   "when_en": "daily", "instruction": "", "section": "regular"}, headers=h)
+    assert "Arabic detail" in c.get("/medicines").text
+    r = c.post("/api/arabic/fill", headers=h).json()
+    filled = {(x["name"], x["field"]): x["value"] for x in r["filled"]}
+    assert filled[("Imod", "notes")] == "اسهال" and filled[("Imod", "form")] == "أقراص" and filled[("Imod", "what it is for")] == "الإسهال"
+    assert filled[("Gamma", "notes")] == "ضروري؛ لا تفوّت الجرعة" and filled[("Gamma", "form")] == "حقنة"
+    still = {(x["name"], x["field"]) for x in r["missing"]}
+    assert ("Odd", "what it is for") in still and ("Odd", "notes") in still and ("Odd", "how to take") in still  # not guessed
+    assert c.post("/api/arabic/fill", headers=h).json()["filled"] == []  # idempotent, never overwrites
+    mid = med_id(c, "Imod")
+    form = c.get(f"/api/medicines/{mid}").json()
+    assert form["notes_ar"] == "اسهال" and form["notes_en"] == "" and form["form_ar"] == "أقراص"
+    # a person's own Arabic is never replaced
+    c.put(f"/api/medicines/{mid}", json={"purpose_ar": "إسهال حاد"}, headers=h)
+    c.put(f"/api/medicines/{mid}", json={"purpose": "Diarrhoea"}, headers=h)
+    c.post("/api/arabic/fill", headers=h)
+    assert c.get(f"/api/medicines/{mid}").json()["purpose_ar"] == "إسهال حاد"
+    ar = c.get("/medicines?lang=ar").text
+    assert "أقراص" in ar and "160 ملغ" in ar and "الشهية" in ar
+    odd_row = ar[ar.index("Odd"):]
+    assert "Mystery purpose" in odd_row and 'class="fb"' in odd_row  # not translated -> shown in English, marked
+    assert 'class="fb"' not in ar[ar.index("Alpha"):ar.index("Odd")] or "Odd" in ar  # translated rows are not marked
+    assert c.post("/api/arabic/fill").status_code == 403  # CSRF
+    assert "أقراص" in c.get("/family?lang=ar").text
+
+
+def test_arabic_units_and_glossary():
+    from app.arabic import arabic_dose, translate_notes, translate_purpose
+    assert arabic_dose("10,000 IU") == "10,000 وحدة دولية" and arabic_dose("500mg") == "500ملغ" and arabic_dose("2 ml") == "2 مل"
+    assert translate_purpose("Appetite / weight") == "الشهية / الوزن" and translate_purpose("Unknown thing") == ""
+    assert translate_notes("Same medicine as Primperan: use one, not both") == "نفس الدواء مثل Primperan: استخدم واحداً فقط وليس كليهما"
+    assert translate_notes("Started 20 Dec 2024") == "بدأ بتاريخ 20 كانون الأول 2024" and translate_notes("Take with orange juice") == ""

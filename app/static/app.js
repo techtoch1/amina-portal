@@ -33,7 +33,7 @@
     // ---- add / edit ----
     const dlg = $('med-dialog'), form = $('med-form');
     let editId = null;
-    const TEXT = ['name', 'dose', 'form', 'when_en', 'purpose', 'notes_en', 'instruction', 'purpose_ar', 'notes_ar'];
+    const TEXT = ['name', 'dose', 'form', 'form_ar', 'when_en', 'purpose', 'notes_en', 'instruction', 'purpose_ar', 'notes_ar'];
     const openMed = (title, v) => {
       form.reset(); $('med-error').textContent = '';
       $('med-title').textContent = title;
@@ -44,11 +44,38 @@
     };
     on('add-med', () => { editId = null; openMed('Add medicine'); });
     on('med-cancel', () => dlg.close());
-    document.querySelectorAll('[data-edit]').forEach((b) => b.onclick = async () => {
-      const {ok, data} = await call('GET', '/api/medicines/' + b.dataset.edit);
+    const openEdit = async (id) => {
+      const {ok, data} = await call('GET', '/api/medicines/' + id);
       if (!ok) return toast(data.error);
-      editId = b.dataset.edit; openMed('Edit medicine', data);
+      editId = String(id); openMed('Edit medicine', data);
+    };
+    document.querySelectorAll('[data-edit]').forEach((b) => b.onclick = () => openEdit(b.dataset.edit));
+
+    // ---- fill missing Arabic from the glossary ----
+    const adlg = $('arabic-dialog');
+    const group = (items, key) => items.reduce((acc, it) => { (acc[it.name] = acc[it.name] || []).push(it); return acc; }, {});
+    on('arabic-fill', async (e) => {
+      e.target.disabled = true;
+      const {ok, data} = await call('POST', '/api/arabic/fill');
+      e.target.disabled = false;
+      if (!ok) return toast(data.error);
+      const f = $('arabic-filled'), m = $('arabic-missing');
+      f.replaceChildren(); m.replaceChildren();
+      f.append(el('h3', 'Filled (' + data.filled.length + ')'));
+      const fl = el('ul');
+      data.filled.forEach((x) => { const li = el('li'); li.append(el('span', x.name + ' — ' + x.field)); li.append(el('span', x.value, 'ar-val')); li.lastChild.dir = 'rtl'; fl.append(li); });
+      f.append(data.filled.length ? fl : el('p', 'Nothing new to fill.', 'muted'));
+      m.append(el('h3', 'Still needs you (' + data.missing.length + ')'));
+      const ml = el('ul');
+      data.missing.forEach((x) => {
+        const li = el('li'); li.append(el('span', x.name + ' — ' + x.field + ': "' + x.english + '"'));
+        const b = el('button', 'Add Arabic', 'btn small'); b.onclick = () => { adlg.close(); openEdit(x.id); };
+        li.append(b); ml.append(li);
+      });
+      m.append(data.missing.length ? ml : el('p', 'Everything has an Arabic version. ✔', 'ok'));
+      adlg.showModal();
     });
+    on('arabic-close', () => { adlg.close(); location.reload(); });
     form.onsubmit = async (e) => {
       e.preventDefault();
       const body = {section: form.section.value};

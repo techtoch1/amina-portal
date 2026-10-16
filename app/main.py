@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
+from .arabic import arabic_dose, fill_row, gaps as arabic_gaps, FIELD_LABELS
 from .config import Settings
 from .db import DB
 from .excel import classify_frequency, details_from_form, load_from_db, norm, read_sheet, rec_to_form, schedule_to_rec
@@ -151,6 +152,7 @@ def create_app(settings=None, client=None):
             return iso
 
     templates.env.filters["local"] = local_str
+    templates.env.filters["ar_dose"] = arabic_dose
 
     # ---- login ----
     @app.get("/login", response_class=HTMLResponse)
@@ -212,11 +214,15 @@ def create_app(settings=None, client=None):
                 continue
             kind, _n, _p = classify_frequency(norm(r["frequency"]))
             m = parsed.get(r["id"])
+            form_txt = (r["form_ar"] or r["form"]) if ar else r["form"]
+            purpose_txt = (r["purpose_ar"] or r["purpose"]) if ar else (r["purpose"] or r["purpose_ar"])
+            notes_txt = (r["notes_ar"] or r["notes_en"]) if ar else (r["notes_en"] or r["notes_ar"])
             groups["as_needed" if kind == "as_needed" else "regular"].append({
-                "id": r["id"], "name": r["name"], "form": r["form"], "dose": r["dose"],
+                "id": r["id"], "name": r["name"], "form": form_txt, "dose": arabic_dose(r["dose"]) if ar else r["dose"],
+                "fb": {"form": ar and bool(r["form"]) and not r["form_ar"], "purpose": ar and bool(r["purpose"]) and not r["purpose_ar"],
+                       "notes": ar and bool(r["notes_en"]) and not r["notes_ar"], "when": ar and not r["instruction"]},
                 "when": ((r["instruction"] if ar else r["when_en"]) or r["when_en"] or r["instruction"]),
-                "purpose": ((r["purpose_ar"] or r["purpose"]) if ar else (r["purpose"] or r["purpose_ar"])),
-                "notes": ((r["notes_ar"] or r["notes_en"]) if ar else (r["notes_en"] or r["notes_ar"])),
+                "purpose": purpose_txt, "notes": notes_txt,
                 "remind": bool(r["remind"] and m and m.remind), "remind_text": _remind_text(m) if m and r["remind"] else "",
                 "next": nxt.get(r["id"]) if r["remind"] else None,
             })
@@ -225,7 +231,9 @@ def create_app(settings=None, client=None):
     def base_ctx(request, active, **extra):
         res, _stopped = load_from_db(db)
         plan = compute_plan(settings, db, [m for m in res.medicines if m.remind], local_now(settings))
+        arabic_missing = sum(len(arabic_gaps(r)) for r in db.list_medicines() if r["active"])
         ctx = {"csrf": request.session.get("csrf", ""), "active": active, "role": request.session.get("role", "owner"),
+               "arabic_missing": arabic_missing,
                "profile": db.profile(), "pending": len(plan["create"]) + len(plan["cancel"]),
                "configured": settings.wbiz_configured, "verified": settings.docs_verified, "slots": slots(),
                "slot_labels": SLOT_LABELS, "day_names": DAY_NAMES}
@@ -371,6 +379,21 @@ def create_app(settings=None, client=None):
         db.update_medicine(mid, sched)
         db.set_remind(mid, True)
         return {"ok": True, "remind": True}
+
+    @app.post("/api/arabic/fill", dependencies=[Depends(auth), Depends(csrf)])
+    def fill_arabic():
+        """Fill EMPTY Arabic fields from the glossary; report what was filled and what still needs a person."""
+        filled, missing = [], []
+        for r in sorted(db.list_medicines(), key=lambda x: x["id"]):
+            if not r["active"]:
+                continue
+            updates, done, still = fill_row(r)
+            if updates:
+                db.update_medicine(r["id"], updates)
+            filled += [{"id": r["id"], "name": r["name"], "field": FIELD_LABELS[f], "value": v} for f, v in done]
+            missing += [{"id": r["id"], "name": r["name"], "field": FIELD_LABELS[f], "english": e} for f, e in still]
+        db.log_event("settings", True, f"Arabic fill: {len(filled)} filled, {len(missing)} still missing")
+        return {"filled": filled, "missing": missing}
 
     @app.delete("/api/medicines/{mid}", dependencies=[Depends(auth), Depends(csrf)])
     def delete_medicine(mid: int):

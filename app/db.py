@@ -53,7 +53,7 @@ class DB:
         with self.conn() as c:
             c.executescript(SCHEMA)
             have = {r["name"] for r in c.execute("PRAGMA table_info(medicines)")}
-            for col in ("when_en", "purpose_ar", "notes_en", "notes_ar", "form"):  # added after the first release
+            for col in ("when_en", "purpose_ar", "notes_en", "notes_ar", "form", "form_ar"):  # added after the first release
                 if col not in have:
                     c.execute(f"ALTER TABLE medicines ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
             if "remind" not in have:  # reminders are now opt-in per medicine; keep the ones that already had times
@@ -121,7 +121,7 @@ class DB:
 
     # ---- medicines ----
     MED_FIELDS = ("name", "dose", "times", "frequency", "day", "start_date", "last_date", "instruction", "purpose",
-                  "when_en", "purpose_ar", "notes_en", "notes_ar", "form")
+                  "when_en", "purpose_ar", "notes_en", "notes_ar", "form", "form_ar")
 
     def list_medicines(self):
         with self.conn() as c:

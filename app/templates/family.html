@@ -49,12 +49,12 @@
       <tbody>
         {% for m in groups[key] %}
         <tr>
-          <td data-label="{{ L.cols[1] }}"><strong dir="auto">{{ m.name }}</strong>{% if m.form %}<div class="muted" dir="auto">{{ m.form }}</div>{% endif %}
+          <td data-label="{{ L.cols[1] }}"><strong dir="auto">{{ m.name }}</strong>{% if m.form %}<div class="muted {{ 'fb' if m.fb.form }}" dir="auto">{{ m.form }}</div>{% endif %}
             {% if m.remind %}<div class="remind-tag">🔔 {{ m.remind_text }}</div>{% endif %}</td>
           <td data-label="{{ L.cols[2] }}" dir="auto">{{ m.dose }}</td>
-          <td data-label="{{ L.cols[3] }}" dir="auto">{{ m.when }}</td>
-          <td data-label="{{ L.cols[4] }}" dir="auto">{{ m.purpose }}</td>
-          <td data-label="{{ L.cols[5] }}" dir="auto">{{ m.notes }}</td>
+          <td data-label="{{ L.cols[3] }}" dir="auto" class="{{ 'fb' if m.fb.when }}">{{ m.when }}</td>
+          <td data-label="{{ L.cols[4] }}" dir="auto" class="{{ 'fb' if m.fb.purpose }}">{{ m.purpose }}</td>
+          <td data-label="{{ L.cols[5] }}" dir="auto" class="{{ 'fb' if m.fb.notes }}">{{ m.notes }}</td>
         </tr>
         {% endfor %}
       </tbody>

@@ -24,6 +24,7 @@ HEADERS = {
     "purpose": ["purpose", "for", "used for", "indication", "what for"],
     "purpose_ar": ["purpose (arabic)", "for (arabic)", "الغرض", "الاستخدام", "لماذا", "دواعي الاستعمال"],
     "form": ["form", "dosage form", "type"],
+    "form_ar": ["form (arabic)", "الشكل", "نوع الدواء"],
     "when_en": ["when to take", "when", "how to take", "directions", "how often"],
     "notes_en": ["notes", "note", "comments", "remarks"],
     "notes_ar": ["notes (arabic)", "ملاحظات", "ملاحظه"],
@@ -274,7 +275,7 @@ def parse_row(row_no, rec):
 
 
 FIELDS = ["name", "dose", "times", "frequency", "day", "start_date", "last_date", "instruction", "purpose",
-          "when_en", "purpose_ar", "notes_en", "notes_ar", "form"]
+          "when_en", "purpose_ar", "notes_en", "notes_ar", "form", "form_ar"]
 
 
 def cell_text(v):
@@ -390,7 +391,7 @@ def load_from_db(db):
 
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
-TEXT_LIMITS = {"name": 120, "dose": 80, "form": 60, "when_en": 300, "purpose": 200, "notes_en": 500,
+TEXT_LIMITS = {"name": 120, "dose": 80, "form": 60, "form_ar": 60, "when_en": 300, "purpose": 200, "notes_en": 500,
                "instruction": 300, "purpose_ar": 200, "notes_ar": 500}
 
 
