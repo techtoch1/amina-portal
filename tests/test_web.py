@@ -138,6 +138,20 @@ def test_suggestions_and_switch_flow(settings, tmp_path):
     assert len(plan["cancel"]) == 4 and plan["create"] == []
 
 
+def test_hand_added_medicine_gets_one_click_suggestion(settings):
+    c = make(settings)
+    h = login(c, settings)
+    mid = c.post("/api/medicines", json={"name": "Hand", "when_en": "Twice daily (morning & evening)", "section": "regular"}, headers=h).json()["id"]
+    assert c.get(f"/api/medicines/{mid}").json()["suggest"] == {"frequency": "daily", "times": ["08:00", "20:00"], "complete": True}
+    wk = c.post("/api/medicines", json={"name": "Wk", "when_en": "Once weekly", "section": "regular"}, headers=h).json()["id"]
+    s2 = c.get(f"/api/medicines/{wk}").json()["suggest"]
+    assert s2["frequency"] == "weekly" and s2["complete"] is False  # still needs a day
+    none = c.post("/api/medicines", json={"name": "Plain", "section": "regular"}, headers=h).json()["id"]
+    assert c.get(f"/api/medicines/{none}").json()["suggest"]["complete"] is False  # no text, no guess
+    pn = c.post("/api/medicines", json={"name": "Pn", "when_en": "when needed", "section": "regular"}, headers=h).json()["id"]
+    assert c.get(f"/api/medicines/{pn}").json()["suggest"]["complete"] is False
+
+
 def test_reminders_report_and_csv(settings, tmp_path):
     c = make(settings)
     h = login(c, settings)
@@ -373,7 +387,7 @@ def test_send_test_reminder_goes_only_to_my_number(settings, tmp_path, monkeypat
     assert all(x["fingerprint"] for x in plan["create"])
     fp = plan["create"][0]["fingerprint"]
     # a pending (not yet applied) message can be tested
-    assert c.post("/api/test-reminder", json={"fingerprint": fp}, headers=h).json() == {"ok": True}
+    assert c.post("/api/test-reminder", json={"fingerprint": fp}, headers=h).json() == {"ok": True, "to": "me"}
     sent = Spy.sent[-1]
     assert sent["phone"] == settings.my_number and settings.mom_number not in sent.values()
     assert sent["message_template"].startswith("🧪") and "Delta" in sent["message_template"] and "Test message" in sent["message_template"]
@@ -381,12 +395,26 @@ def test_send_test_reminder_goes_only_to_my_number(settings, tmp_path, monkeypat
     # applied reminders can be tested from the report; the report shows the button
     c.post("/api/sync/apply", json={"hash": plan["hash"]}, headers=h)
     page = c.get("/reminders").text
-    assert page.count('data-test="') == 2
+    assert page.count('data-test="') == 4  # a 'to me' and a 'to Mom' button on each of the 2 reminders
     import app.main as main_mod
     monkeypatch.setattr(main_mod, "TEST_MIN_INTERVAL", 0.0)
     active_fp = page.split('data-test="')[1].split('"')[0]
-    assert c.post("/api/test-reminder", json={"fingerprint": active_fp}, headers=h).json() == {"ok": True}
+    assert c.post("/api/test-reminder", json={"fingerprint": active_fp}, headers=h).json() == {"ok": True, "to": "me"}
     assert c.post("/api/test-reminder", json={"fingerprint": "nope"}, headers=h).status_code == 404
     assert c.post("/api/test-reminder", json={"fingerprint": fp}).status_code == 403  # CSRF
+    # --- test to Mom: needs explicit confirmation, uses her number, her own Arabic note, no 'copy to me' line
+    assert c.post("/api/test-reminder", json={"fingerprint": fp, "to": "mom"}, headers=h).status_code == 400
+    me_fp = next(x["fingerprint"] for x in plan["create"] if x["recipient"] == "me")
+    r = c.post("/api/test-reminder", json={"fingerprint": me_fp, "to": "mom", "confirm": True}, headers=h)
+    assert r.json() == {"ok": True, "to": "mom"}
+    sent = Spy.sent[-1]
+    assert sent["phone"] == settings.mom_number and sent["message_template"].startswith("🧪 رسالة تجريبية من تطبيق")
+    assert "نسخة للمتابعة" not in sent["message_template"] and "Delta" in sent["message_template"]
+    assert "Test message" not in sent["message_template"]  # her note is Arabic only
+    assert c.post("/api/test-reminder", json={"fingerprint": fp, "to": "mom", "confirm": True}, headers=h).status_code in (200, 429)
+    monkeypatch.setattr(main_mod, "TEST_MIN_INTERVAL", 0.0)
+    assert f'data-mom-tail="{settings.mom_number[-3:]}"' in c.get("/reminders").text  # shown in the confirmation
+    settings.mom_number = ""
+    assert c.post("/api/test-reminder", json={"fingerprint": fp, "to": "mom", "confirm": True}, headers=h).status_code == 400
     settings.my_number = ""
     assert c.post("/api/test-reminder", json={"fingerprint": active_fp}, headers=h).status_code == 400

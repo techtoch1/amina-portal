@@ -16,7 +16,7 @@
 <title>{% block title %}Medicines{% endblock %} · Amina</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
-<body data-page="{{ active }}">
+<body data-page="{{ active }}" data-mom-tail="{{ mom_tail|default('') }}">
 <a class="skip" href="#main">Skip to content</a>
 <header class="appbar noprint">
   <div class="brand"><span class="logo" aria-hidden="true">{{ icon('pill') }}</span><span dir="auto">{{ profile.get('name') or 'Medicine reminders' }}</span></div>

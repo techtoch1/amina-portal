@@ -6,7 +6,7 @@ until they approve the full list. Clock times come from the user's own
 """
 import re
 
-from .excel import norm
+from .excel import infer_frequency, norm
 
 DEFAULT_SLOTS = {"morning": "08:00", "noon": "13:00", "evening": "20:00", "night": "22:00"}
 SLOT_LABELS = {"morning": "Morning", "noon": "Noon", "evening": "Evening", "night": "Bedtime"}
@@ -50,12 +50,12 @@ def suggest_times(when_en, instruction, slots=None):
 
 def suggestion(form, slots=None):
     """form: output of rec_to_form. Returns {'frequency', 'times', 'complete'}.
-    complete = a daily schedule with times, so the bell can switch on in one click."""
+    complete = a daily schedule with times, so the switch can turn on in one click."""
     kind = form.get("frequency") or ""
-    if kind in ("as_needed", "chart_only", ""):
-        kind = "daily" if kind == "" and (form.get("when_en") or form.get("instruction")) else kind
+    if kind in ("", "chart_only"):  # nothing scheduled yet (hand-added or imported): read "When to take"
+        said = infer_frequency(f"{form.get('when_en') or ''}")
+        kind = {"daily": "daily", "weekly": "weekly", "as needed": "as_needed"}.get(said, "every_n" if said.startswith("every") else "")
     times = form.get("times") or suggest_times(form.get("when_en"), form.get("instruction"), slots)
-    if kind in ("as_needed", "chart_only") or not times:
+    if kind in ("as_needed", "chart_only", "") or not times:
         return {"frequency": kind if kind in ("daily", "weekly", "every_n") else "", "times": times, "complete": False}
-    complete = kind == "daily"
-    return {"frequency": kind, "times": times, "complete": complete}
+    return {"frequency": kind, "times": times, "complete": kind == "daily"}

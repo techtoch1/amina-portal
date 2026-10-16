@@ -186,13 +186,16 @@
     const rv = $('review-dialog');
     let planHash = null;
     const sendTest = async (btn) => {
+      const toMom = btn.dataset.to === 'mom';
+      if (toMom && !confirm('Send this test message to MOM now?\n\nIt goes to her WhatsApp number ending …' + (document.body.dataset.momTail || '') +
+          ' and starts with a short Arabic note that it is only a test.')) return;
       const label = btn.textContent;
       btn.disabled = true; btn.textContent = 'Sending…';
-      const {ok, data} = await call('POST', '/api/test-reminder', {fingerprint: btn.dataset.test});
+      const {ok, data} = await call('POST', '/api/test-reminder', {fingerprint: btn.dataset.test, to: toMom ? 'mom' : 'me', confirm: toMom});
       btn.disabled = false;
-      btn.textContent = ok ? 'Sent ✔ — check your phone' : label;
+      btn.textContent = ok ? (toMom ? 'Sent to Mom ✔' : 'Sent ✔ — check your phone') : label;
       if (!ok) { toast('Test failed: ' + data.error, 9000); if ($('plan-error') && rv.open) $('plan-error').textContent = data.error; }
-      else toast('Test message sent to your number.');
+      else toast(toMom ? 'Test message sent to Mom.' : 'Test message sent to your number.');
     };
     document.querySelectorAll('.report [data-test]').forEach((b) => b.onclick = () => sendTest(b));
     const render = (list, items, verb) => {
@@ -203,8 +206,12 @@
           (it.kind === 'cron' ? 'repeats ' : 'once at ') + it.when, 'meta'));
         li.append(el('pre', it.message));
         if (it.fingerprint && verb === 'Create') {
-          const b = el('button', 'Send test to me', 'btn small test-btn'); b.type = 'button'; b.dataset.test = it.fingerprint;
-          b.onclick = () => sendTest(b); li.append(b);
+          const row = el('div', null, 'testrow');
+          [['me', 'Test to me'], ['mom', 'Test to Mom']].forEach(([to, label]) => {
+            const b = el('button', label, 'btn small test-btn' + (to === 'mom' ? ' mom' : '')); b.type = 'button';
+            b.dataset.test = it.fingerprint; b.dataset.to = to; b.onclick = () => sendTest(b); row.append(b);
+          });
+          li.append(row);
         }
         list.append(li);
       });

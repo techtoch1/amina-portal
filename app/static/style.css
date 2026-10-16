@@ -187,5 +187,5 @@ body.login{display:grid;place-items:center;min-height:100vh;padding:20px}
 .ar-val{unicode-bidi:plaintext;font-size:1.05rem}
 @media print{.fb::after{display:none}}
 
-.test-btn{margin-top:8px}
-.report td .test-btn{display:inline-flex;margin-inline-start:8px;margin-top:0}
+.testrow{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.test-btn.mom{border-color:var(--brand);color:var(--brand-d)}

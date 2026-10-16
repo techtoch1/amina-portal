@@ -23,6 +23,7 @@ from .config import Settings
 from .db import DB
 from .excel import classify_frequency, details_from_form, load_from_db, norm, read_sheet, rec_to_form, schedule_to_rec
 from .schedule import cron_human, next_cron_fire, next_injections, today_agenda
+from .messages import COPY_NOTE
 from .suggest import DEFAULT_SLOTS, SLOT_LABELS, suggestion
 from .sync import apply_plan, compute_plan, copy_enabled, local_now, plan_to_json, rollover
 from .wbiztool import WbizClient, WbizError
@@ -35,6 +36,7 @@ STATUS_KINDS = ["Blood pressure", "Blood sugar", "Weight", "Temperature", "Mood 
 MAX_UPLOAD = 2 * 1024 * 1024
 TEST_MIN_INTERVAL = 3.0  # seconds between manual test sends
 TEST_HEADER = "🧪 رسالة تجريبية — Test message (not a real reminder)\n\n"
+TEST_HEADER_MOM = "🧪 رسالة تجريبية من تطبيق تذكير الدواء — يرجى تجاهلها\n\n"
 FAMILY_KEY = "family.hash"
 
 LABELS = {
@@ -235,7 +237,7 @@ def create_app(settings=None, client=None):
         plan = compute_plan(settings, db, [m for m in res.medicines if m.remind], local_now(settings))
         arabic_missing = sum(len(arabic_gaps(r)) for r in db.list_medicines() if r["active"])
         ctx = {"csrf": request.session.get("csrf", ""), "active": active, "role": request.session.get("role", "owner"),
-               "arabic_missing": arabic_missing,
+               "arabic_missing": arabic_missing, "mom_tail": settings.mom_number[-3:],
                "profile": db.profile(), "pending": len(plan["create"]) + len(plan["cancel"]),
                "configured": settings.wbiz_configured, "verified": settings.docs_verified, "slots": slots(),
                "slot_labels": SLOT_LABELS, "day_names": DAY_NAMES}
@@ -491,11 +493,16 @@ def create_app(settings=None, client=None):
 
     @app.post("/api/test-reminder", dependencies=[Depends(auth), Depends(csrf)])
     async def test_reminder(request: Request):
-        """Send one of the app's own reminder messages to MY number only (never Mom) as a test."""
-        fingerprint = str((await request.json()).get("fingerprint") or "")
-        if not settings.my_number:
-            return JSONResponse({"error": "Your number is not set (Settings)"}, status_code=400)
-        if _time.time() - test_gate["last"] < TEST_MIN_INTERVAL:
+        """Send one of the app's own reminder messages as a test: to ME (default) or, after confirmation, to Mom."""
+        body = await request.json()
+        fingerprint = str(body.get("fingerprint") or "")
+        to_mom = body.get("to") == "mom"
+        number = settings.mom_number if to_mom else settings.my_number
+        if not number:
+            return JSONResponse({"error": ("Mom's" if to_mom else "Your") + " number is not set (Settings)"}, status_code=400)
+        if to_mom and body.get("confirm") is not True:
+            return JSONResponse({"error": "Confirm that you want to message Mom"}, status_code=400)
+        if _time.time() - test_gate["last"] < (TEST_MIN_INTERVAL * (3 if to_mom else 1)):
             return JSONResponse({"error": "Wait a few seconds between tests"}, status_code=429)
         message = next((r["message"] for r in db.active() if r["fingerprint"] == fingerprint), None)
         if message is None:  # not applied yet: look it up in the pending plan
@@ -503,14 +510,16 @@ def create_app(settings=None, client=None):
             message = next((d.message for d in plan["create"] if d.fingerprint == fingerprint), None)
         if message is None:
             return JSONResponse({"error": "That reminder no longer exists — reload the page"}, status_code=404)
+        if to_mom and message.startswith(COPY_NOTE):  # the copy-to-me note makes no sense for her
+            message = message[len(COPY_NOTE):].lstrip("\n")
         test_gate["last"] = _time.time()
         try:
-            client.send_message(settings.my_number, TEST_HEADER + message)
+            client.send_message(number, (TEST_HEADER_MOM if to_mom else TEST_HEADER) + message)
         except WbizError as exc:
-            db.log_event("test", False, "Test reminder: " + str(exc))
+            db.log_event("test", False, f"Test reminder to {'Mom' if to_mom else 'me'}: {exc}")
             return JSONResponse({"error": str(exc)}, status_code=502)
-        db.log_event("test", True, "Test reminder sent to my number")
-        return {"ok": True}
+        db.log_event("test", True, f"Test reminder sent to {'Mom' if to_mom else 'my number'}")
+        return {"ok": True, "to": "mom" if to_mom else "me"}
 
     @app.put("/api/config", dependencies=[Depends(auth), Depends(csrf)])
     async def save_config(request: Request):
