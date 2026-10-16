@@ -148,3 +148,33 @@ def describe(med):
     if med.kind == "chart_only":
         return "On the chart only (no reminders)"
     return "As needed (no reminders)"
+
+
+def cron_human(cron):
+    """'0 8 * * *' -> 'Every day at 08:00'; '0 9 * * 5' -> 'Every Fri at 09:00'."""
+    parts = (cron or "").split()
+    if len(parts) != 5:
+        return cron or ""
+    minute, hour, _dom, _mon, dow = parts
+    at = f"{int(hour):02d}:{int(minute):02d}"
+    if dow == "*":
+        return f"Every day at {at}"
+    days = ", ".join(_DAYS[(int(d) - 1) % 7] for d in dow.split(","))  # cron 0=Sun ... python 0=Mon
+    return f"Every {days} at {at}"
+
+
+def next_cron_fire(cron, now):
+    """Next datetime after `now` (naive local) for the simple crons this app creates."""
+    parts = (cron or "").split()
+    if len(parts) != 5:
+        return None
+    minute, hour, _dom, _mon, dow = parts
+    allowed = None if dow == "*" else {(int(d) - 1) % 7 for d in dow.split(",")}  # -> python weekday
+    for offset in range(9):
+        d = now.date() + timedelta(days=offset)
+        if allowed is not None and d.weekday() not in allowed:
+            continue
+        at = datetime.combine(d, time(int(hour), int(minute)))
+        if at > now:
+            return at
+    return None

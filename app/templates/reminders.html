@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Reminders{% endblock %}
+{% block body %}
+<div class="pagehead">
+  <div>
+    <h1>Reminders report</h1>
+    <p class="muted">What is scheduled on Wbiztool, what is waiting to be sent to it, and what happened.</p>
+  </div>
+  <div class="toolbar noprint">
+    <a class="btn" href="/reminders/export.csv">Download CSV</a>
+    <button class="btn" id="print-btn">Print</button>
+  </div>
+</div>
+
+<section class="stats" aria-label="Summary">
+  <div class="stat"><span class="num">{{ rows|length }}</span><span class="lbl">Active reminders</span><span class="sub">{{ mom_count }} to Mom{% if me_count %} · {{ me_count }} copies to me{% endif %}</span></div>
+  <div class="stat {{ 'attn' if pending }}"><span class="num">{{ pending }}</span><span class="lbl">Waiting to apply</span><span class="sub">{{ 'Needs your approval' if pending else 'Everything is sent' }}</span></div>
+  <div class="stat {{ 'bad' if failed_week }}"><span class="num">{{ failed_week }}</span><span class="lbl">Failed (last 7 days)</span><span class="sub">{% if last_sync %}Last change: {{ last_sync.ts|local }}{% else %}No changes yet{% endif %}</span></div>
+  <div class="stat"><span class="num" id="wb-dot">…</span><span class="lbl">Wbiztool</span><span class="sub" id="wb-status">Checking…</span></div>
+</section>
+
+{% if pending %}
+<div class="notice info noprint">
+  <strong>{{ pending }} change{{ 's' if pending != 1 }} not sent to Wbiztool yet.</strong>
+  <button class="btn primary" id="review-btn">Review &amp; apply</button>
+</div>
+{% endif %}
+
+<section class="card">
+  <h2>Scheduled</h2>
+  {% if rows %}
+  <table class="report">
+    <thead><tr><th scope="col">Next send</th><th scope="col">Medicines</th><th scope="col">Schedule</th><th scope="col">To</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td data-label="Next send"><strong>{{ r.next.strftime('%a %d %b, %H:%M') if r.next else '—' }}</strong></td>
+        <td data-label="Medicines" dir="auto">{{ r.names }}
+          <details><summary>Message</summary><pre class="msg" dir="auto">{{ r.message }}</pre></details></td>
+        <td data-label="Schedule">{{ r.when }}</td>
+        <td data-label="To"><span class="chip {{ 'soft' if r.recipient == 'me' }}">{{ 'Mom' if r.recipient == 'mom' else 'Copy to me' }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty"><p>Nothing is scheduled yet.</p><a class="btn primary" href="/medicines">Turn on reminders in Medicines</a></div>
+  {% endif %}
+</section>
+
+<section class="card">
+  <div class="split">
+    <h2>Activity</h2>
+    <div class="seg noprint" role="group" aria-label="Filter">
+      <a class="{{ 'active' if show != 'failed' }}" href="/reminders">All</a>
+      <a class="{{ 'active' if show == 'failed' }}" href="/reminders?show=failed">Failed</a>
+    </div>
+  </div>
+  <ul class="timeline">
+    {% for e in events %}
+    <li class="{{ 'ok' if e.ok else 'bad' }}"><span class="mark" aria-hidden="true">{{ '✔' if e.ok else '✖' }}</span>
+      <div><strong>{{ e.kind|capitalize }}</strong> — {{ e.detail }}<div class="muted">{{ e.ts|local }}</div></div></li>
+    {% else %}<li class="muted">{{ 'No failures.' if show == 'failed' else 'Nothing yet.' }}</li>{% endfor %}
+  </ul>
+  <p class="muted">Delivery receipts aren't available from Wbiztool here, so this shows what this app sent and cancelled.</p>
+</section>
+
+<dialog id="review-dialog" data-auto="{{ 1 if auto_review else 0 }}">
+  <h2>Review changes</h2>
+  <p class="muted">Wbiztool reminders can't be edited, so a change cancels the old one and creates a new one. Nothing is sent until you approve.</p>
+  <label class="check"><input type="checkbox" id="copy" {{ 'checked' if copy }}> Also send a copy of each reminder to my number</label>
+  <p id="plan-error" class="err" role="alert"></p>
+  <div id="plan" hidden>
+    <h3>To cancel (<span id="n-cancel">0</span>)</h3><ul class="plan" id="cancel-list"></ul>
+    <h3>To create (<span id="n-create">0</span>)</h3><ul class="plan" id="create-list"></ul>
+    <label class="check approve"><input type="checkbox" id="approve"> I reviewed this list and approve it</label>
+  </div>
+  <ul class="plain" id="apply-result"></ul>
+  <div class="row">
+    <button class="btn primary" id="apply-btn" disabled>Apply to Wbiztool</button>
+    <button class="btn" id="review-close">Close</button>
+  </div>
+</dialog>
+{% endblock %}

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Medicines{% endblock %}
+{% block body %}
+<div class="pagehead noprint">
+  <div><h1 dir="auto">{{ profile.get('name') or 'Medicines' }}</h1><p class="muted">{{ today_label }}</p></div>
+  <div class="toolbar">
+    <div class="seg" role="group" aria-label="Language">
+      <a class="{{ 'active' if lang == 'en' }}" href="/family?lang=en">English</a>
+      <a class="{{ 'active' if lang == 'ar' }}" href="/family?lang=ar">عربي</a>
+    </div>
+    <button class="btn" id="print-btn">Print</button>
+  </div>
+</div>
+
+<div class="family" dir="{{ L.dir }}" lang="{{ lang }}">
+  {% if profile.get('allergies') or profile.get('conditions') or profile.get('doctor') or profile.get('emergency_contact') or profile.get('pharmacy') %}
+  <section class="card big">
+    <h2>{{ 'معلومات مهمة' if lang == 'ar' else 'Important information' }}</h2>
+    <dl class="facts">
+      {% if profile.get('allergies') %}<div class="warnrow"><dt>{{ L.allergies }}</dt><dd dir="auto">{{ profile.allergies }}</dd></div>{% endif %}
+      {% if profile.get('conditions') %}<div><dt>{{ 'الحالة' if lang == 'ar' else 'Conditions' }}</dt><dd dir="auto">{{ profile.conditions }}</dd></div>{% endif %}
+      {% if profile.get('doctor') %}<div><dt>{{ L.prescriber }}</dt><dd dir="auto">{{ profile.doctor }}{% if profile.get('doctor_phone') %} · <a href="tel:{{ profile.doctor_phone|replace(' ', '') }}" dir="ltr">{{ profile.doctor_phone }}</a>{% endif %}</dd></div>{% endif %}
+      {% if profile.get('emergency_contact') %}<div><dt>{{ 'للطوارئ' if lang == 'ar' else 'Emergency contact' }}</dt><dd dir="auto">{{ profile.emergency_contact }}</dd></div>{% endif %}
+      {% if profile.get('pharmacy') %}<div><dt>{{ 'الصيدلية' if lang == 'ar' else 'Pharmacy' }}</dt><dd dir="auto">{{ profile.pharmacy }}</dd></div>{% endif %}
+    </dl>
+  </section>
+  {% endif %}
+
+  <section class="card big">
+    <h2>{{ 'اليوم' if lang == 'ar' else 'Today' }}</h2>
+    {% if today %}
+    <ul class="agenda big">
+      {% for t in today %}
+      <li class="{{ 'past' if t.past }}"><span class="time" dir="ltr">{{ t.time }}</span>
+        <div><strong dir="auto">{{ t.name }}</strong>{% if t.dose %} <span class="muted" dir="auto">{{ t.dose }}</span>{% endif %}
+          {% if t.when %}<div class="muted" dir="auto">{{ t.when }}</div>{% endif %}</div></li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted">{{ 'لا توجد أدوية بمواعيد اليوم.' if lang == 'ar' else 'No timed medicines today.' }}</p>{% endif %}
+  </section>
+
+  <section class="chart readonly">
+    <h2 class="chart-title">{{ L.title }}</h2>
+    {% for key in ['regular', 'as_needed'] %}
+    {% if groups[key] %}
+    <h3 class="sect">{{ L[key] }} <span class="count">{{ groups[key]|length }}</span></h3>
+    <table class="chart-table big">
+      <thead><tr>{% for c in L.cols[1:] %}<th scope="col">{{ c }}</th>{% endfor %}</tr></thead>
+      <tbody>
+        {% for m in groups[key] %}
+        <tr>
+          <td data-label="{{ L.cols[1] }}"><strong dir="auto">{{ m.name }}</strong>{% if m.form %}<div class="muted" dir="auto">{{ m.form }}</div>{% endif %}
+            {% if m.remind %}<div class="remind-tag">🔔 {{ m.remind_text }}</div>{% endif %}</td>
+          <td data-label="{{ L.cols[2] }}" dir="auto">{{ m.dose }}</td>
+          <td data-label="{{ L.cols[3] }}" dir="auto">{{ m.when }}</td>
+          <td data-label="{{ L.cols[4] }}" dir="auto">{{ m.purpose }}</td>
+          <td data-label="{{ L.cols[5] }}" dir="auto">{{ m.notes }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    {% endfor %}
+    {% if not total %}<p class="muted">{{ L.empty }}</p>{% endif %}
+    {% if profile.get('notes') %}<p class="chart-note" dir="auto">{{ profile.notes }}</p>{% endif %}
+  </section>
+</div>
+{% endblock %}

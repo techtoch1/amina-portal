@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block body %}
+<div class="pagehead"><div><h1>Settings</h1><p class="muted">Connection, default times and family access.</p></div></div>
+
+<section class="card">
+  <h2>Wbiztool connection <span id="wb-status" class="muted"></span></h2>
+  <p class="muted">Find these in your Wbiztool account. The API key is stored on the server and never shown again; leave the field blank to keep the saved key.</p>
+  <form id="conf-form" class="stack" autocomplete="off">
+    <div class="two">
+      <label>Client ID (number) <input name="client_id" value="{{ conf.client_id }}" inputmode="numeric" maxlength="12"></label>
+      <label>WhatsApp client <input name="whatsapp_client" value="{{ conf.whatsapp_client }}" maxlength="64" spellcheck="false"></label>
+    </div>
+    <label>API key
+      <input name="api_key" type="password" autocomplete="new-password" spellcheck="false" maxlength="300"
+        placeholder="{{ '•••••• saved (' ~ conf.api_key_length ~ ' characters) — leave blank to keep' if conf.api_key_set else 'Paste the API key' }}"></label>
+    <div class="two">
+      <label>Mom's WhatsApp number <input name="mom_number" value="{{ conf.mom_number }}" inputmode="tel" maxlength="30" placeholder="96170123456"></label>
+      <label>Your WhatsApp number <input name="my_number" value="{{ conf.my_number }}" inputmode="tel" maxlength="30" placeholder="96170123456"></label>
+    </div>
+    <p class="muted">Numbers include the country code, digits only. Your number is used for copies and the test message — check it carefully.</p>
+    <label class="check"><input type="checkbox" name="docs_verified" {{ 'checked' if conf.docs_verified }}>
+      <span>I checked the Wbiztool endpoint paths in <code>app/wbiztool.py</code> against their docs — allow creating reminders and sending messages</span></label>
+    <p id="conf-result" role="status"></p>
+    <div class="row">
+      <button class="btn primary" type="submit">Save</button>
+      <button class="btn" type="button" id="conf-test">Save &amp; test connection</button>
+      <button class="btn" type="button" id="test-btn">Send test message to my number</button>
+    </div>
+    <p id="test-result" role="status"></p>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Default reminder times</h2>
+  <p class="muted">Used to suggest times from "When to take" (e.g. "morning &amp; evening") and for the preset buttons. Always check them against the prescription.</p>
+  <form id="slots-form" class="stack">
+    <div class="slots">
+      {% for key, label in slot_labels.items() %}<label>{{ label }} <input type="time" name="{{ key }}" value="{{ slots[key] }}" required></label>{% endfor %}
+    </div>
+    <p id="slots-result" role="status"></p>
+    <div><button class="btn primary" type="submit">Save times</button></div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Family access</h2>
+  <p class="muted">Give family a separate password for a <strong>read-only</strong> page: today's medicines, the full table in English and Arabic, her allergies and contacts. They can't change anything or see the settings.</p>
+  <p>Status: <strong id="family-state">{{ 'On' if family_enabled else 'Off' }}</strong>{% if family_enabled %} — share <code>/family</code> and the family password{% endif %}</p>
+  <form id="family-form" class="stack" autocomplete="off">
+    <label>{{ 'New family password' if family_enabled else 'Family password' }} (8+ characters)
+      <input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="200"></label>
+    <p id="family-result" role="status"></p>
+    <div class="row">
+      <button class="btn primary" type="submit">{{ 'Change password' if family_enabled else 'Turn on family access' }}</button>
+      {% if family_enabled %}<button class="btn danger" type="button" id="family-off">Turn off</button>{% endif %}
+    </div>
+  </form>
+</section>
+{% endblock %}

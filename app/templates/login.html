@@ -3,17 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign in</title>
+<meta name="color-scheme" content="light dark">
+<title>Sign in · Amina</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="login">
-<main class="card narrow">
+<main class="logincard card">
+  <div class="logo big" aria-hidden="true"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 20.5 3.5 13.5a4.95 4.95 0 0 1 7-7l7 7a4.95 4.95 0 0 1-7 7Z"/><path d="m8.5 8.5 7 7"/></svg></div>
   <h1>Medicine reminders</h1>
-  <form method="post" action="/login">
+  <p class="muted">Enter your password to continue.</p>
+  <form method="post" action="/login" class="stack">
     <label for="pw">Password</label>
     <input id="pw" name="password" type="password" autocomplete="current-password" autofocus required>
     {% if error %}<p class="err" role="alert">{{ error }}</p>{% endif %}
-    <button class="btn primary" type="submit">Sign in</button>
+    <button class="btn primary block" type="submit">Sign in</button>
   </form>
 </main>
 </body>

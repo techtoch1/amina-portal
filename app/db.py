@@ -89,9 +89,14 @@ class DB:
         with self.conn() as c:
             c.execute("INSERT INTO events(ts,kind,ok,detail) VALUES(?,?,?,?)", (now_iso(), kind, int(ok), detail[:500]))
 
-    def recent_events(self, limit=10):
+    def recent_events(self, limit=10, failed_only=False):
+        where = "WHERE ok=0" if failed_only else ""
         with self.conn() as c:
-            return [dict(r) for r in c.execute("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,))]
+            return [dict(r) for r in c.execute(f"SELECT * FROM events {where} ORDER BY id DESC LIMIT ?", (limit,))]
+
+    def count_failed_since(self, iso):
+        with self.conn() as c:
+            return c.execute("SELECT COUNT(*) FROM events WHERE ok=0 AND ts>=?", (iso,)).fetchone()[0]
 
     def active(self):
         with self.conn() as c:

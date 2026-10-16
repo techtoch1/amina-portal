@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Medicines{% endblock %}
+{% block body %}
+{% if not configured %}
+<div class="notice warn noprint">Wbiztool isn't connected yet — reminders can't be sent. <a href="/settings">Set it up in Settings →</a></div>
+{% elif not verified %}
+<div class="notice warn noprint">Sending is paused until you confirm the Wbiztool endpoint paths. <a href="/settings">Open Settings →</a></div>
+{% endif %}
+
+<div class="pagehead noprint">
+  <div>
+    <h1>Medicines</h1>
+    <p class="muted">Turn the reminder switch on for the medicines you want WhatsApp reminders for. Times come from "When to take".</p>
+  </div>
+  <div class="toolbar">
+    <div class="seg" role="group" aria-label="Language">
+      <a class="{{ 'active' if lang == 'en' }}" href="/medicines?lang=en">English</a>
+      <a class="{{ 'active' if lang == 'ar' }}" href="/medicines?lang=ar">عربي</a>
+    </div>
+    <button class="btn primary" id="add-med">+ Add medicine</button>
+    <label class="btn" for="xlsx">Import Excel</label>
+    <input id="xlsx" type="file" accept=".xlsx" hidden>
+    <button class="btn" id="print-btn">Print</button>
+  </div>
+</div>
+<p id="import-result" role="status" class="noprint"></p>
+
+<section class="chart" dir="{{ L.dir }}" lang="{{ lang }}">
+  <h2 class="chart-title">{% if profile.get('name') %}<bdi>{{ profile.name }}</bdi> — {% endif %}{{ L.title }}</h2>
+  <p class="muted">{{ L.updated }} <bdi>{{ updated }}</bdi>{% if profile.get('doctor') %} · {{ L.prescriber }}: <bdi>{{ profile.doctor }}</bdi>{% endif %}{% if profile.get('doctor_phone') %} · <bdi>{{ profile.doctor_phone }}</bdi>{% endif %}</p>
+  {% if profile.get('allergies') %}<p class="allergy"><strong>{{ L.allergies }}:</strong> <bdi>{{ profile.allergies }}</bdi></p>{% endif %}
+
+  {% for key in ['regular', 'as_needed'] %}
+  {% if groups[key] %}
+  <h3 class="sect">{{ L[key] }} <span class="count">{{ groups[key]|length }}</span></h3>
+  <table class="chart-table">
+    <thead><tr>{% for c in L.cols %}<th scope="col">{{ c }}</th>{% endfor %}</tr></thead>
+    <tbody>
+      {% for m in groups[key] %}
+      <tr data-id="{{ m.id }}">
+        <td data-label="{{ L.cols[0] }}" class="remind-cell">
+          <button class="switch {{ 'on' if m.remind }} noprint" role="switch" aria-checked="{{ 'true' if m.remind else 'false' }}"
+            data-toggle="{{ m.id }}" aria-label="{{ L.set }}: {{ m.name }}"><span class="knob"></span></button>
+          <div class="remind-text">
+            {% if m.remind %}<strong>{{ m.remind_text }}</strong>{% if m.next %}<div class="muted">{{ L.next }}: {{ m.next.strftime('%d %b') }}</div>{% endif %}
+            <button class="link noprint" data-remind="{{ m.id }}">{{ L.edit }}</button>
+            {% else %}<span class="muted">{{ L.off }}</span>{% endif %}
+          </div>
+        </td>
+        <td data-label="{{ L.cols[1] }}"><button class="namebtn" data-edit="{{ m.id }}" dir="auto"><strong>{{ m.name }}</strong></button>{% if m.form %}<div class="muted" dir="auto">{{ m.form }}</div>{% endif %}</td>
+        <td data-label="{{ L.cols[2] }}" dir="auto">{{ m.dose }}</td>
+        <td data-label="{{ L.cols[3] }}" dir="auto">{{ m.when }}</td>
+        <td data-label="{{ L.cols[4] }}" dir="auto">{{ m.purpose }}</td>
+        <td data-label="{{ L.cols[5] }}" dir="auto">{{ m.notes }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% endfor %}
+  {% if not total %}<div class="empty"><p>{{ L.empty }}</p></div>{% endif %}
+  {% if profile.get('notes') %}<p class="chart-note" dir="auto">{{ profile.notes }}</p>{% endif %}
+</section>
+
+{% if pending %}
+<div class="applybar noprint">
+  <span><strong>{{ pending }}</strong> reminder change{{ 's' if pending != 1 }} not sent yet</span>
+  <a class="btn primary" href="/reminders?review=1">Review &amp; apply</a>
+</div>
+{% endif %}
+
+<dialog id="med-dialog">
+  <form id="med-form" method="dialog">
+    <h2 id="med-title">Add medicine</h2>
+    <label>Name<input name="name" required maxlength="120" dir="auto"></label>
+    <div class="two">
+      <label>Dose<input name="dose" maxlength="80" placeholder="e.g. 500 mg" dir="auto"></label>
+      <label>Form<input name="form" maxlength="60" placeholder="Tablet, Injection…" dir="auto"></label>
+    </div>
+    <label>Type
+      <select name="section"><option value="regular">Regular</option><option value="as_needed">As needed (no reminders)</option></select></label>
+    <fieldset><legend>English</legend>
+      <label>When to take <input name="when_en" maxlength="300" placeholder="e.g. Twice daily (morning &amp; evening)" dir="auto"></label>
+      <label>What it is for <input name="purpose" maxlength="200" dir="auto"></label>
+      <label>Notes <textarea name="notes_en" rows="2" maxlength="500" dir="auto"></textarea></label>
+    </fieldset>
+    <fieldset><legend>العربية</legend>
+      <label>How to take — also sent in the WhatsApp reminder
+        <input name="instruction" maxlength="300" dir="rtl" lang="ar" placeholder="حبة صباحاً ومساءً"></label>
+      <label>What it is for <input name="purpose_ar" maxlength="200" dir="rtl" lang="ar"></label>
+      <label>Notes <textarea name="notes_ar" rows="2" maxlength="500" dir="rtl" lang="ar"></textarea></label>
+    </fieldset>
+    <p id="med-error" class="err" role="alert"></p>
+    <div class="row">
+      <button class="btn primary" type="submit" id="med-save">Save</button>
+      <button class="btn" type="button" id="med-cancel">Cancel</button>
+      <button class="btn danger" type="button" id="med-delete" hidden>Delete</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="rem-dialog">
+  <form id="rem-form" method="dialog">
+    <h2 id="rem-title">Reminder</h2>
+    <p class="hint" id="rem-hint" dir="auto"></p>
+    <label>Repeats
+      <select name="frequency">
+        <option value="">Choose…</option>
+        <option value="daily">Every day</option>
+        <option value="weekly">Certain days of the week</option>
+        <option value="every_n">Every N days (e.g. injection)</option>
+      </select></label>
+    <div id="r-weekly" hidden><span class="muted">Days</span>
+      <div class="days">{% for d in day_names %}<label class="check"><input type="checkbox" name="wd" value="{{ loop.index0 }}">{{ d }}</label>{% endfor %}</div></div>
+    <div id="r-everyn" hidden>
+      <label>Every <input name="every_n" type="number" min="1" max="365" inputmode="numeric" class="short"> days</label>
+      <label>Date <input name="date" type="date"></label>
+      <label>That date is the <select name="date_kind"><option value="start">next dose</option><option value="last">last dose already taken</option></select></label></div>
+    <div><span class="muted">Times — a WhatsApp message is sent at each</span>
+      <div id="r-times"></div>
+      <div class="row">
+        {% for key, label in slot_labels.items() %}<button type="button" class="btn small" data-preset="{{ slots[key] }}">{{ label }} {{ slots[key] }}</button>{% endfor %}
+        <button type="button" class="btn small" id="r-add-time">+ Other</button>
+      </div>
+      <p class="muted">Change the preset times in Settings. Use the times from the prescription.</p></div>
+    <p id="rem-error" class="err" role="alert"></p>
+    <div class="row">
+      <button class="btn primary" type="submit" id="rem-save">Turn reminder on</button>
+      <button class="btn danger" type="button" id="rem-off" hidden>Turn off</button>
+      <button class="btn" type="button" id="rem-cancel">Cancel</button>
+    </div>
+  </form>
+</dialog>
+{% endblock %}
