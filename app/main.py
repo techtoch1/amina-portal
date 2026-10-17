@@ -22,6 +22,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .arabic import arabic_dose, fill_row, gaps as arabic_gaps, FIELD_LABELS
 from .config import Settings
+from .export import build_doctor_workbook
 from .db import DB
 from .excel import classify_frequency, details_from_form, load_from_db, norm, read_sheet, rec_to_form, schedule_to_rec
 from .schedule import cron_human, next_cron_fire, next_injections, today_agenda
@@ -134,7 +135,7 @@ def create_app(settings=None, client=None):
 
     @app.exception_handler(NotOwner)
     async def not_owner(request, exc):
-        if request.url.path.startswith("/api/") or request.url.path.endswith(".csv"):
+        if request.url.path.startswith("/api/") or request.url.path.endswith((".csv", ".xlsx")):
             return JSONResponse({"error": "Not allowed"}, status_code=403)
         return RedirectResponse("/family", status_code=303)
 
@@ -353,6 +354,14 @@ def create_app(settings=None, client=None):
             request, "reminders", rows=rows, events=events, show=show, auto_review=bool(review),
             copy=copy_enabled(settings, db), failed_week=db.count_failed_since(since), last_sync=last_sync,
             mom_count=sum(1 for r in rows if r["recipient"] == "mom"), me_count=sum(1 for r in rows if r["recipient"] == "me")))
+
+    @app.get("/medicines/export.xlsx", dependencies=[Depends(auth)])
+    def medicines_xlsx():
+        """The medicines exactly as they are in the dashboard, laid out for a doctor to confirm."""
+        data = build_doctor_workbook(db, settings, local_now(settings))
+        stamp = local_now(settings).strftime("%Y-%m-%d")
+        return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f'attachment; filename="Medicines_for_doctor_review_{stamp}.xlsx"'})
 
     @app.get("/reminders/export.csv", dependencies=[Depends(auth)])
     def reminders_csv():

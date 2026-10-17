@@ -589,3 +589,49 @@ def test_mom_profile_and_log_import_export(settings):
     assert f.get("/api/mom-export").status_code == 403
     assert f.post("/api/mom-import", content="{}", headers={**fh, "Content-Type": "application/json"}).status_code == 403
     assert c.post("/api/mom-import", content="{}", headers={"Content-Type": "application/json"}).status_code == 403
+
+
+def test_excel_export_for_doctor(settings, tmp_path):
+    import io as _io
+    from openpyxl import load_workbook
+    c = make(settings)
+    h = login(c, settings)
+    imported(c, h, tmp_path)
+    c.post("/api/arabic/fill", headers=h)
+    c.put("/api/profile", json={"name": "Amina", "doctor": "Prof. Kamar", "notes": "Chemo tablets are not on this list"}, headers=h)
+    delta, eps = med_id(c, "Delta"), med_id(c, "Epsilon")
+    c.post(f"/api/medicines/{delta}/reminder", json={"on": True, "frequency": "daily", "times": ["08:00", "20:00"]}, headers=h)
+    c.post(f"/api/medicines/{eps}/reminder", json={"on": True, "times": ["09:00"], "weekdays": [4]}, headers=h)
+    c.post("/api/medicines", json={"name": "=HYPERLINK(\"http://x\")", "dose": "+1", "section": "regular"}, headers=h)
+    r = c.get("/medicines/export.xlsx")
+    assert r.status_code == 200 and "spreadsheetml" in r.headers["content-type"]
+    assert r.headers["content-disposition"].startswith('attachment; filename="Medicines_for_doctor_review_')
+    wb = load_workbook(_io.BytesIO(r.content))
+    assert wb.sheetnames == ["Medicines", "Reminder schedule", "Patient"]
+    ws = wb["Medicines"]
+    assert "Amina — Medicines for doctor review" in ws["A1"].value and "Allergies: Not recorded" in ws["A3"].value
+    header = [c_.value for c_ in ws[5]]
+    assert header[1] == "Medication" and "Reminder sent to Mom" in header[5] and header[9] == "Correct?"
+    rows = {row[1].value: [c_.value for c_ in row] for row in ws.iter_rows(min_row=6) if row[1].value}
+    assert len(rows) == 9  # 8 from the sheet + the hand-added one; the section rows are not medicines
+    assert rows["Delta"][5] == "Every day at 08:00, 20:00" and rows["Epsilon"][5] == "Every Fri at 09:00"
+    assert rows["Alpha"][5] == "No reminder set" and rows["Eta"][5] == "No reminder (as needed)"
+    assert rows["Delta"][2] == "500 mg" and rows["Delta"][3] == "Tablet" and rows["Delta"][8] == "حبة صباحاً ومساءً"
+    section_labels = [row[0].value for row in ws.iter_rows(min_row=6) if isinstance(row[0].value, str)]
+    assert any(v.startswith("REGULAR") for v in section_labels) and any(v.startswith("AS NEEDED") for v in section_labels)
+    assert ws.data_validations.dataValidation[0].formula1 == '"Yes,No - needs change"'
+    evil = next(row[1] for row in ws.iter_rows(min_row=6) if row[1].value and str(row[1].value).startswith("="))
+    assert evil.data_type == "s" and evil.value.startswith("=HYPERLINK")  # stored as text, never a formula
+    assert any(str(row[1].value) == "+1" or str(row[2].value) == "+1" for row in ws.iter_rows(min_row=6))
+    assert "Chemo tablets are not on this list" in str([c_.value for row in ws.iter_rows(min_row=17) for c_ in row if c_.value])
+    sch = wb["Reminder schedule"]
+    texts = [[c_.value for c_ in row] for row in sch.iter_rows(min_row=4) if row[0].value]
+    assert [t[0] for t in texts] == ["Every day at 08:00", "Every Fri at 09:00", "Every day at 20:00"]
+    assert any("تذكير: حان وقت الدواء" in str(t[2]) for t in texts) and all("نسخة" not in str(t[2]) for t in texts)  # Mom's version only
+    assert wb["Patient"]["B1"].value == "Amina" and "Not recorded" in wb["Patient"]["B4"].value
+    # owner only
+    c.put("/api/family-access", json={"password": "family-pass-123"}, headers=h)
+    f = TestClient(c.app, base_url="http://testserver")
+    login(f, settings, "family-pass-123")
+    assert f.get("/medicines/export.xlsx").status_code == 403
+    assert make(settings).get("/medicines/export.xlsx", follow_redirects=False).status_code == 303
