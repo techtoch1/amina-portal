@@ -373,7 +373,7 @@ def test_send_test_reminder_goes_only_to_my_number(settings, tmp_path, monkeypat
     class Spy(FakeClient):
         sent = []
 
-        def _post(self, path, fields=None):
+        def _post(self, path, fields=None, retries=0):
             if path.endswith("/send_msg/"):
                 Spy.sent.append(dict(fields))
             return {"status": 1, "reminder_id": "r1"}
@@ -488,7 +488,7 @@ def test_report_shows_fallback_one_off_as_a_single_date(settings, tmp_path):
     from app.wbiztool import WbizError
 
     class Rejecting(FakeClient):
-        def _post(self, path, fields=None):
+        def _post(self, path, fields=None, retries=0):
             if path == "/schedule_msg/":
                 raise WbizError("/schedule_msg/ failed (status=0): Scheduled date & time is not in valid format")
             return {"status": 1, "reminder_id": "r1"}

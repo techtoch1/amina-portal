@@ -16,6 +16,7 @@ Rules baked in:
 """
 import logging
 import re
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -70,7 +71,15 @@ ID_KEYS = ("reminder_id", "msg_id", "message_id", "id")
 
 
 class WbizError(Exception):
-    pass
+    network = False  # True when Wbiztool never answered (timeout / no connection)
+
+
+class WbizNetworkError(WbizError):
+    """No usable answer at all. For a create this is ambiguous: the reminder may exist on Wbiztool anyway."""
+    network = True
+
+
+CONNECT_TIMEOUT, READ_TIMEOUT = 10, 30  # seconds
 
 
 def _s(value):
@@ -113,7 +122,7 @@ class WbizClient:
                 "(set WBIZ_DOCS_VERIFIED=true after checking)"
             )
 
-    def _post(self, path, fields=None):
+    def _post(self, path, fields=None, retries=0):
         self._require_config()
         body = {
             "client_id": int(self.s.client_id),
@@ -122,10 +131,18 @@ class WbizClient:
         }
         body.update({k: _s(v) for k, v in (fields or {}).items()})
         url = self.s.base_url.rstrip("/") + path
-        try:
-            resp = self.http.post(url, json=body, timeout=25)
-        except requests.RequestException as exc:
-            raise WbizError(f"Network error calling {path}: {type(exc).__name__}") from None
+        resp = None
+        for attempt in range(retries + 1):  # only read-only calls are ever retried
+            try:
+                resp = self.http.post(url, json=body, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT))
+                break
+            except requests.RequestException as exc:
+                if attempt < retries:
+                    time.sleep(2)
+                    continue
+                what = ("did not answer within %d seconds" % READ_TIMEOUT if isinstance(exc, requests.Timeout)
+                        else "could not be reached")
+                raise WbizNetworkError(f"Wbiztool {what} (calling {path}). It may be slow or down — try again in a minute.") from None
         try:
             data = resp.json()
         except ValueError:
@@ -159,13 +176,13 @@ class WbizClient:
 
     # ---- read-only (always allowed) ----
     def me(self):
-        return self._post(PATHS["me"])
+        return self._post(PATHS["me"], retries=1)
 
     def client_status(self):
-        return self._post(PATHS["client_status"])
+        return self._post(PATHS["client_status"], retries=1)
 
     def list_reminders(self):
-        return self._post(PATHS["reminder_list"])
+        return self._post(PATHS["reminder_list"], retries=1)
 
     # ---- mutating (blocked until docs verified) ----
     @staticmethod

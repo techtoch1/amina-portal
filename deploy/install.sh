@@ -101,6 +101,7 @@ server {
     client_max_body_size 1m;
     location / {
         proxy_pass http://127.0.0.1:$PORT;
+        proxy_read_timeout 180s;   # applying reminders can take a while when Wbiztool is slow
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$remote_addr;

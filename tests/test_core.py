@@ -56,7 +56,7 @@ class FakeClient(WbizClient):
         super().__init__(s)
         self.calls, self.n = [], 0
 
-    def _post(self, path, fields=None):
+    def _post(self, path, fields=None, retries=0):
         self.n += 1
         self.calls.append((path, fields))
         return {"status": 1, "data": {"reminder_id": f"r{self.n}"}}
@@ -158,7 +158,7 @@ def test_reminders_are_sent_with_a_name(settings):
             super().__init__(s)
             self.sent = []
 
-        def _post(self, path, fields=None):
+        def _post(self, path, fields=None, retries=0):
             self.sent.append((path, dict(fields)))
             return {"status": 1, "reminder_id": "r1"}
 
@@ -204,7 +204,7 @@ def test_schedule_date_format_is_discovered_and_remembered(settings):
             self.values = []
             self.bodies = []
 
-        def _post(self, path, fields=None):
+        def _post(self, path, fields=None, retries=0):
             self.values.append(fields["schedule_time"])
             self.bodies.append(dict(fields))
             if fields["schedule_time"] != "29-10-2026 08:00":
@@ -228,7 +228,7 @@ def test_schedule_date_format_is_discovered_and_remembered(settings):
     class Nope(WbizClient):
         calls = 0
 
-        def _post(self, path, fields=None):
+        def _post(self, path, fields=None, retries=0):
             Nope.calls += 1
             raise WbizError("/schedule_msg/ failed (status=0): Phone cannot be null")
 
@@ -242,7 +242,7 @@ def test_schedule_date_format_is_discovered_and_remembered(settings):
     assert Nope.calls == 1  # unrelated errors are not retried with other date formats
 
     class Never(WbizClient):
-        def _post(self, path, fields=None):
+        def _post(self, path, fields=None, retries=0):
             raise WbizError("Scheduled date & time is not in valid format")
 
     try:
@@ -270,7 +270,7 @@ def test_one_off_date_falls_back_to_a_date_specific_reminder(settings, tmp_path,
             super().__init__(s)
             self.log = []
 
-        def _post(self, path, fields=None):
+        def _post(self, path, fields=None, retries=0):
             self.log.append((path, dict(fields or {})))
             if path == "/schedule_msg/":
                 raise WbizError("/schedule_msg/ failed (status=0): Scheduled date & time is not in valid format")
@@ -304,3 +304,79 @@ def test_one_off_date_falls_back_to_a_date_specific_reminder(settings, tmp_path,
     assert [(r["cron"], r["fire_at"]) for r in db.active()] == [("0 8 26 11 *", "2026-11-26 08:00")] * 2
     # nothing left to cancel, and a failing cancel is retried instead of lost
     assert rollover(c, settings, db, [shot]) == []
+
+
+def test_network_timeouts_stop_the_apply_and_never_hide_uncertainty(settings, tmp_path, monkeypatch):
+    import requests
+    import app.sync as sync
+    from app.excel import Medicine
+    from app.sync import apply_plan, compute_plan
+    from app.wbiztool import WbizNetworkError
+
+    class Dead(WbizClient):
+        def __init__(self, s):
+            super().__init__(s)
+            self.calls = 0
+
+        def _post(self, path, fields=None, retries=0):
+            self.calls += 1
+            raise WbizNetworkError("Wbiztool did not answer within 30 seconds (calling /reminder/create/).")
+
+    db = DB(tmp_path / "t.db")
+    meds = [Medicine(row=i, name=f"M{i}", dose="", instruction="", purpose="", kind="daily", times=[f"0{i}:00"], remind=True)
+            for i in range(1, 4)]
+    monkeypatch.setattr(sync, "local_now", lambda s: NOW)
+    plan = compute_plan(settings, db, meds, NOW)
+    assert len(plan["create"]) == 6  # 3 times x (Mom + copy)
+    c = Dead(settings)
+    res = apply_plan(c, settings, db, meds, plan["hash"])
+    assert c.calls == 1  # it gave up after the first timeout instead of waiting for all six
+    assert res[0]["ok"] is False and "may or may not have been done" in res[0]["error"]
+    assert all("not attempted" in r["error"] for r in res[1:]) and len(res) == 6
+    assert db.active() == []  # nothing recorded as created, so nothing is wrongly cancelled later
+    # a normal rejection (not a network problem) still lets the other items go ahead
+    class Picky(WbizClient):
+        def _post(self, path, fields=None, retries=0):
+            if fields["cron"].startswith("0 1 "):
+                raise WbizError("/reminder/create/ failed (status=0): bad")
+            return {"status": 1, "reminder_id": "r"}
+    res = apply_plan(Picky(settings), settings, db, meds, compute_plan(settings, db, meds, NOW)["hash"])
+    assert [r["ok"] for r in res].count(False) == 2 and [r["ok"] for r in res].count(True) == 4
+
+
+def test_read_only_calls_are_retried_but_creates_are_not(settings):
+    import requests
+
+    class Flaky:
+        def __init__(self, fail_times):
+            self.fail, self.calls = fail_times, 0
+
+        def post(self, url, json=None, timeout=None):
+            self.calls += 1
+            assert timeout == (10, 30)
+            if self.calls <= self.fail:
+                raise requests.exceptions.ReadTimeout("slow")
+            return Resp("", 200, {"status": 1, "name": "ok"})
+
+    import app.wbiztool as w
+    w.time.sleep = lambda s: None
+    once = Flaky(1)
+    assert WbizClient(settings, once).me()["name"] == "ok" and once.calls == 2  # one retry rescued it
+    twice = Flaky(5)
+    try:
+        WbizClient(settings, twice).me()
+        assert False
+    except w.WbizNetworkError as e:
+        assert "did not answer within 30 seconds" in str(e) and e.network and twice.calls == 2
+    posts = Flaky(5)
+    try:
+        WbizClient(settings, posts).create_reminder("1", "m", "0 8 * * *", "Asia/Beirut", "n")
+        assert False
+    except w.WbizNetworkError:
+        assert posts.calls == 1  # creating is never retried automatically: it could duplicate the reminder
+    refused = type("R", (), {"post": lambda self, *a, **k: (_ for _ in ()).throw(requests.exceptions.ConnectionError("x"))})()
+    try:
+        WbizClient(settings, refused).client_status()
+        assert False
+    except w.WbizNetworkError as e:
+        assert "could not be reached" in str(e)

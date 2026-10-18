@@ -10,7 +10,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from .schedule import build_desired
-from .wbiztool import WbizError
+from .wbiztool import WbizError, WbizNetworkError
 
 _lock = threading.Lock()
 
@@ -138,8 +138,14 @@ def apply_plan(client, settings, db, medicines, approved_hash):
         client._require_config()
         client._require_verified()
         results = []
+        stopped = False
+        UNSURE = " — Wbiztool did not answer, so this may or may not have been done there. Check your Wbiztool account before applying again."
+
         for r in plan["cancel"]:
             label = f"cancel {r['recipient']} {r['cron'] or r['fire_at']}"
+            if stopped:
+                results.append({"action": label, "ok": False, "error": "not attempted (stopped after a network problem)"})
+                continue
             try:
                 if not r["remote_id"]:
                     raise WbizError("no remote id stored — cancel it manually in Wbiztool")
@@ -148,17 +154,24 @@ def apply_plan(client, settings, db, medicines, approved_hash):
                 results.append({"action": label, "ok": True})
                 db.log_event("cancel", True, label)
             except WbizError as exc:
-                results.append({"action": label, "ok": False, "error": str(exc)})
+                note = str(exc) + (UNSURE if exc.network else "")
+                results.append({"action": label, "ok": False, "error": note})
                 db.log_event("cancel", False, f"{label}: {exc}")
+                stopped = stopped or exc.network  # no point waiting for every remaining item
         for d in plan["create"]:
             label = f"create {d.recipient} {d.when}"
+            if stopped:
+                results.append({"action": label, "ok": False, "error": "not attempted (stopped after a network problem)"})
+                continue
             try:
                 rid = _create(client, settings, db, d)
                 results.append({"action": label, "ok": True, "warning": "" if rid else "no id returned — can't be cancelled by the app"})
                 db.log_event("create", True, label)
             except WbizError as exc:
-                results.append({"action": label, "ok": False, "error": str(exc)})
+                note = str(exc) + (UNSURE if exc.network else "")
+                results.append({"action": label, "ok": False, "error": note})
                 db.log_event("create", False, f"{label}: {exc}")
+                stopped = stopped or exc.network
         return results
 
 
@@ -182,4 +195,6 @@ def rollover(client, settings, db, medicines):
                     out.append(label)
                 except WbizError as exc:
                     db.log_event("rollover", False, f"{label}: {exc}")
+                    if exc.network:  # Wbiztool is not answering: try again on the next pass
+                        break
         return out
