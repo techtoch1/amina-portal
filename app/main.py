@@ -356,6 +356,9 @@ def create_app(settings=None, client=None):
         rows = [r for r in sorted(db.list_medicines(), key=lambda x: x["id"]) if r["active"]]
         return {m.row: m for m in res.medicines}, rows
 
+    def currency():
+        return db.get_setting("stock.currency", "$") or "$"
+
     def stock_limits():
         return int(db.get_setting("stock.low_days", "10")), int(db.get_setting("stock.order_days", "30"))
 
@@ -499,7 +502,10 @@ def create_app(settings=None, client=None):
         counts = {k: sum(1 for r in rows if r["status"] == k) for k in ("out", "low", "ok", "none")}
         return templates.TemplateResponse(request, "stock.html", base_ctx(
             request, "stock", rows=rows, counts=counts, today=local_now(settings).date().isoformat(), low_days=low, order_days=order, num=stk.num, plural=stk.plural,
-            to_order=[r for r in rows if r["order_qty"] and r["status"] in ("low", "out")],
+            to_order=[r for r in rows if r["order_qty"] and r["status"] in ("low", "out")], currency=currency(),
+            money=lambda x: stk.money(x, currency()), priced=sum(1 for r in rows if r["unit_price"]),
+            month_total=sum(r["cost_month"] or 0 for r in rows), order_total=sum(r["order_cost"] or 0 for r in rows if r["status"] in ("low", "out")),
+            value_total=sum(r["value"] or 0 for r in rows),
             stock_number=settings.stock_number, alerts_ready=bool(settings.stock_number and settings.wbiz_configured and settings.docs_verified)))
 
     @app.get("/stock/report", response_class=HTMLResponse, dependencies=[Depends(editor)])
@@ -512,13 +518,14 @@ def create_app(settings=None, client=None):
         return templates.TemplateResponse(request, "stock_report.html", base_ctx(
             request, "stock", report=report, start=a.isoformat(), end=b.isoformat(), preset=preset if not (start and end) else "",
             days=(b - a).days + 1, num=stk.num, plural=stk.plural, total_auto=round(sum(r["auto"] for r in report), 2),
-            total_manual=round(sum(r["manual"] for r in report), 2), total_bought=round(sum(r["bought"] for r in report), 2)))
+            total_manual=round(sum(r["manual"] for r in report), 2), total_bought=round(sum(r["bought"] for r in report), 2),
+            money=lambda x: stk.money(x, currency()), total_cost=sum(r["cost"] or 0 for r in report), priced=sum(1 for r in report if r["cost"] is not None)))
 
     @app.get("/stock/export.xlsx", dependencies=[Depends(editor)])
     def stock_export():
         now = local_now(settings)
         low, order = stock_limits()
-        data = build_stock_workbook(stock_overview(), low, order, now, db.profile())
+        data = build_stock_workbook(stock_overview(), low, order, now, db.profile(), currency())
         return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition": f'attachment; filename="Medicine_stock_{now.strftime("%Y-%m-%d")}.xlsx"'})
 
@@ -528,7 +535,7 @@ def create_app(settings=None, client=None):
         a, b = _range(preset, start, end, now.date())
         by_id, rows = stock_parsed()
         stk.materialize(db, by_id, now.date())
-        data = build_usage_workbook(stk.usage_report(db, by_id, rows, a, b, now), a, b, db.profile())
+        data = build_usage_workbook(stk.usage_report(db, by_id, rows, a, b, now), a, b, db.profile(), currency())
         return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition": f'attachment; filename="Medicine_usage_{a.isoformat()}_to_{b.isoformat()}.xlsx"'})
 
@@ -565,7 +572,8 @@ def create_app(settings=None, client=None):
         by_id, _rows = stock_parsed()
         item = db.stock_item(mid) or {}
         return {"name": row["name"], "unit": stk.unit_word(row["form"], item.get("unit", "")), "unit_default": stk.unit_word(row["form"]),
-                "units_per_dose": item.get("units_per_dose", 1),
+                "units_per_dose": item.get("units_per_dose", 1), "pack_price": item.get("pack_price"), "pack_size": item.get("pack_size"),
+                "currency": currency(),
                 "daily_use": item.get("daily_use"), "tracking": bool(item.get("tracking", 1)),
                 "suggested_units": stk.suggest_units(row["when_en"]), "counted": db.has_moves(mid),
                 "has_schedule": stk.has_schedule(by_id.get(mid)),
@@ -588,8 +596,15 @@ def create_app(settings=None, client=None):
             raise HTTPException(400, "'Counted in' should be a word such as tablets, capsules or drinks")
         if unit.lower() == stk.unit_word(_med_or_404(mid)["form"]):
             unit = ""  # same as the default: nothing to remember
+        price = None if body.get("pack_price") in (None, "") else _finite(body.get("pack_price"), 0, 10_000_000)
+        size = None if body.get("pack_size") in (None, "") else _finite(body.get("pack_size"), 0.01, 100000)
+        if body.get("pack_price") not in (None, "") and price is None:
+            raise HTTPException(400, "The price must be a number (0 or more)")
+        if body.get("pack_size") not in (None, "") and size is None:
+            raise HTTPException(400, "The number in a pack must be a number above 0")
         db.ensure_stock_item(mid, "")
-        db.update_stock_item(mid, units_per_dose=upd, daily_use=daily, tracking=1 if body.get("tracking", True) else 0, unit=unit)
+        db.update_stock_item(mid, units_per_dose=upd, daily_use=daily, tracking=1 if body.get("tracking", True) else 0, unit=unit,
+                             pack_price=price or None, pack_size=size if price else None)
         return {"ok": True}
 
     @app.post("/api/stock/{mid}/move", dependencies=[Depends(editor), Depends(csrf)])
@@ -660,6 +675,9 @@ def create_app(settings=None, client=None):
             raise HTTPException(400, "The alert number should be 8-15 digits including the country code")
         db.set_setting("stock.low_days", str(int(low)))
         db.set_setting("stock.order_days", str(int(order)))
+        cur = " ".join(str(body.get("currency") or "").split())[:8]
+        if "currency" in body:
+            db.set_setting("stock.currency", cur or "$")
         db.set_setting("conf.stock_number", number)
         settings.apply_overrides(db)
         return {"ok": True, "stock_number": number}

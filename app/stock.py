@@ -111,6 +111,13 @@ def plural(unit, qty):
     return unit
 
 
+def unit_price(item):
+    """Estimated price of one unit (tablet...) from the pack price and pack size; None when no price is set."""
+    if not item or not item.get("pack_price"):
+        return None
+    return item["pack_price"] / (item.get("pack_size") or 1)
+
+
 def overview(db, medicines_by_id, rows, now, low_days=10, order_days=30):
     """One dict per active medicine: count, daily use, days left, run-out date, status, order quantity."""
     items = db.stock_items()
@@ -122,7 +129,8 @@ def overview(db, medicines_by_id, rows, now, low_days=10, order_days=30):
         item = items.get(mid)
         base = {"id": mid, "name": r["name"], "form": r["form"], "unit": unit_word(r["form"], (items.get(mid) or {}).get("unit", "")), "tracked": False,
                 "on_hand": None, "daily": None, "days_left": None, "run_out": None, "status": "none", "order_qty": 0,
-                "units_per_dose": 1, "daily_use": None, "source": "none", "tracking": False}
+                "units_per_dose": 1, "daily_use": None, "source": "none", "tracking": False,
+                "unit_price": unit_price(item), "cost_month": None, "order_cost": None, "value": None}
         if item:
             base.update(units_per_dose=item["units_per_dose"], daily_use=item["daily_use"], tracking=bool(item["tracking"]))
         if not item or not item["tracking"] or not db.has_moves(mid):
@@ -142,6 +150,9 @@ def overview(db, medicines_by_id, rows, now, low_days=10, order_days=30):
         base.update(tracked=True, on_hand=hand, daily=daily, days_left=left, run_out=run if daily or hand <= 0 else None,
                     status=status, order_qty=need,
                     source="schedule" if has_schedule(m) else ("manual" if item.get("daily_use") else "none"))
+        price = base["unit_price"]
+        if price:
+            base.update(value=hand * price, order_cost=need * price, cost_month=daily * 30 * price if daily else None)
         out.append(base)
     return out
 
@@ -171,8 +182,17 @@ def usage_report(db, medicines_by_id, rows, start, end, now):
         out.append({"id": mid, "name": r["name"], "unit": unit_word(r["form"], item.get("unit", "")), "opening": round(opening, 2),
                     "bought": round(bought, 2), "auto": round(auto, 2), "manual": round(manual, 2),
                     "adjust": round(adjust, 2), "closing": round(closing, 2),
-                    "per_day": round((auto + manual) / days, 2) if days else 0})
+                    "per_day": round((auto + manual) / days, 2) if days else 0,
+                    "cost": round((auto + manual) * unit_price(item), 2) if unit_price(item) else None})
     return out
+
+
+def money(x, currency="$"):
+    """1234.5 -> '$1,234.50' (a word such as 'LBP' goes after the amount)."""
+    if x is None:
+        return "—"
+    text = f"{x:,.0f}" if abs(x) >= 100 else f"{x:,.2f}"
+    return f"{currency}{text}" if len(currency) <= 1 else f"{text} {currency}"
 
 
 def num(x):

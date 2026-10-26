@@ -956,3 +956,38 @@ def test_admin_account_edits_everything_but_settings_and_is_tracked(settings, tm
     # family still read-only; settings page lists admins for the owner
     c.post("/api/users", json={"name": "Maya", "password": "maya-pass-123"}, headers=h)
     assert "Maya" in c.get("/settings").text
+
+
+def test_stock_price_estimates(settings, tmp_path, monkeypatch):
+    import io as _io
+    from datetime import datetime as _dt
+    from openpyxl import load_workbook
+    import app.main as main_mod
+    monkeypatch.setattr(main_mod, "local_now", lambda s: _dt(2026, 10, 26, 7, 0))
+    c = make(settings)
+    h = login(c, settings)
+    imported(c, h, tmp_path)
+    delta = med_id(c, "Delta")                                         # twice daily
+    c.post(f"/api/medicines/{delta}/reminder", json={"on": True, "frequency": "daily", "times": ["08:00", "20:00"]}, headers=h)
+    c.post(f"/api/stock/{delta}/move", json={"kind": "count", "qty": 20, "day": "2026-10-26"}, headers=h)
+    assert "Est. cost" not in c.get("/stock").text.split("<table")[0]       # nothing priced yet: no cost cards
+    put = lambda **kw: c.put(f"/api/stock/{delta}/settings", json={"units_per_dose": 1, "tracking": True, **kw}, headers=h)  # noqa: E731
+    assert put(pack_price="abc").status_code == 400 and put(pack_price=30, pack_size=0).status_code == 400
+    assert put(pack_price=30, pack_size=60).status_code == 200            # $30 for 60 tablets = $0.50 each
+    d = c.get(f"/api/stock/{delta}").json()
+    assert d["pack_price"] == 30 and d["pack_size"] == 60 and d["currency"] == "$"
+    page = c.get("/stock").text
+    assert "$30.00" in page                                               # 2 a day x 30 days x $0.50
+    assert "To order now" in page and "$20.00" in page                    # 60 needed - 20 on hand = 40 tablets x $0.50
+    # Excel has the price columns
+    sw = load_workbook(_io.BytesIO(c.get("/stock/export.xlsx").content))["Stock"]
+    row = next(r for r in sw.iter_rows(min_row=5, values_only=True) if r[0] == "Delta")
+    assert row[10] == 0.5 and row[11] == 30 and row[12] == 20
+    # usage report: cost of what was used in the period
+    rep = c.get("/stock/report?start=2026-10-26&end=2026-10-26").text
+    assert "Est. cost" in rep
+    # price without a pack size is per unit; clearing the price removes the estimate; currency is editable
+    assert put(pack_price=2).status_code == 200 and c.get(f"/api/stock/{delta}").json()["pack_size"] is None
+    assert c.put("/api/stock/settings", json={"low_days": 10, "order_days": 30, "currency": "LBP"}, headers=h).status_code == 200
+    assert "LBP" in c.get("/stock").text
+    assert put(pack_price="").status_code == 200 and "Est. cost / month</span>" not in c.get("/stock").text

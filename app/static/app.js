@@ -347,6 +347,8 @@
       $('st-dose-label').textContent = data.unit.charAt(0).toUpperCase() + data.unit.slice(1) + ' per dose';
       $('st-title').textContent = data.name + ' — stock settings'; $('st-error').textContent = '';
       sform.tracking.checked = data.tracking; sform.units_per_dose.value = data.units_per_dose; sform.daily_use.value = data.daily_use == null ? '' : data.daily_use;
+      sform.pack_price.value = data.pack_price == null ? '' : data.pack_price; sform.pack_size.value = data.pack_size == null ? '' : data.pack_size;
+      sdlg.querySelectorAll('.st-cur').forEach((n) => n.textContent = data.currency);
       $('st-hint').textContent = 'How many ' + data.unit + ' are taken each time a dose is due (use 0.5 for half a tablet).' +
         (data.suggested_units > 1 ? ' Suggested from "When to take": ' + data.suggested_units + '.' : '') +
         (data.has_schedule ? '' : ' This medicine has no reminder schedule yet.');
@@ -359,7 +361,8 @@
     sform.onsubmit = async (e) => {
       e.preventDefault();
       const {ok, data} = await call('PUT', '/api/stock/' + stId + '/settings',
-        {tracking: sform.tracking.checked, units_per_dose: sform.units_per_dose.value, daily_use: sform.daily_use.value, unit: sform.unit.value});
+        {tracking: sform.tracking.checked, units_per_dose: sform.units_per_dose.value, daily_use: sform.daily_use.value, unit: sform.unit.value,
+         pack_price: sform.pack_price.value, pack_size: sform.pack_size.value});
       if (!ok) { $('st-error').textContent = data.error; return; }
       toastNext('Saved.'); location.reload();
     };
@@ -377,7 +380,7 @@
 
     const af = $('alert-form');
     const saveAlerts = async () => {
-      const {ok, data} = await call('PUT', '/api/stock/settings', {stock_number: af.stock_number.value, low_days: af.low_days.value, order_days: af.order_days.value});
+      const {ok, data} = await call('PUT', '/api/stock/settings', {stock_number: af.stock_number.value, low_days: af.low_days.value, order_days: af.order_days.value, currency: af.currency.value});
       say($('alert-result'), ok, ok ? 'Saved ✔' : data.error); return ok;
     };
     af.onsubmit = async (e) => { e.preventDefault(); if (await saveAlerts()) setTimeout(() => location.reload(), 700); };

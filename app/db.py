@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS stock_items (
   daily_use REAL,                          -- manual units per day, used when the medicine has no schedule
   through_day TEXT NOT NULL DEFAULT '',    -- last day whose scheduled use has been written to the moves
   alert_state TEXT NOT NULL DEFAULT '',    -- '' | low | out  (what the last WhatsApp alert said)
+  pack_price REAL,                         -- estimated price of one pack
+  pack_size REAL,                          -- units in a pack (empty: the price is per unit)
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS stock_moves (
@@ -104,6 +106,9 @@ class DB:
             si_cols = {r["name"] for r in c.execute("PRAGMA table_info(stock_items)")}
             if si_cols and "unit" not in si_cols:  # what the stock is counted in; '' = the default (tablets)
                 c.execute("ALTER TABLE stock_items ADD COLUMN unit TEXT NOT NULL DEFAULT ''")
+            if si_cols and "pack_price" not in si_cols:  # estimated price: of one pack, and how many units it holds
+                c.execute("ALTER TABLE stock_items ADD COLUMN pack_price REAL")
+                c.execute("ALTER TABLE stock_items ADD COLUMN pack_size REAL")
             if "remind" not in have:  # reminders are now opt-in per medicine; keep the ones that already had times
                 c.execute("ALTER TABLE medicines ADD COLUMN remind INTEGER NOT NULL DEFAULT 0")
                 c.execute("UPDATE medicines SET remind=1 WHERE times != '' AND active=1")
@@ -309,7 +314,7 @@ class DB:
         return self.stock_item(mid)
 
     def update_stock_item(self, mid, **fields):
-        keys = [k for k in fields if k in ("tracking", "units_per_dose", "daily_use", "through_day", "alert_state", "unit")]
+        keys = [k for k in fields if k in ("tracking", "units_per_dose", "daily_use", "through_day", "alert_state", "unit", "pack_price", "pack_size")]
         if not keys:
             return
         with self.conn() as c:

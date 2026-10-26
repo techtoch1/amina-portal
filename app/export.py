@@ -187,7 +187,7 @@ _STATUS = {"ok": "OK", "low": "LOW", "out": "OUT", "none": "Not counted"}
 _FILL = {"low": PatternFill("solid", fgColor="FFF4DF"), "out": PatternFill("solid", fgColor="FDECEA")}
 
 
-def build_stock_workbook(rows, low_days, order_days, now, profile):
+def build_stock_workbook(rows, low_days, order_days, now, profile, currency="$"):
     from .stock import num
 
     wb = Workbook()
@@ -195,40 +195,49 @@ def build_stock_workbook(rows, low_days, order_days, now, profile):
     ws = _sheet(wb, "Stock", f"{name} — Medicine stock",
                 f"As of {now.strftime('%d %b %Y %H:%M')}. Estimated from the schedule plus manual changes; "
                 f"LOW = under {low_days} days left.",
-                ["Medication", "Type", "Form", "On hand", "Unit", "Use / day", "Days left", "Runs out", "Status", f"Order for {order_days} days"],
-                [30, 12, 14, 11, 12, 11, 11, 14, 14, 18], first=True)
+                ["Medication", "Type", "Form", "On hand", "Unit", "Use / day", "Days left", "Runs out", "Status", f"Order for {order_days} days",
+                 f"Price / unit ({currency})", f"Est. cost / month ({currency})", f"Order cost ({currency})"],
+                [30, 12, 14, 11, 12, 11, 11, 14, 14, 18, 16, 20, 16], first=True)
     for i, r in enumerate(rows, 5):
         values = [r["name"], "As needed" if r.get("section") == "as_needed" else "Regular", r["form"], r["on_hand"] if r["tracked"] else None, r["unit"] if r["tracked"] else "",
                   round(r["daily"], 2) if r["tracked"] and r["daily"] else None,
                   r["days_left"] if r["tracked"] else None,
                   r["run_out"].strftime("%d %b %Y") if r["run_out"] else "", _STATUS[r["status"]],
-                  r["order_qty"] or None]
+                  r["order_qty"] or None,
+                  round(r["unit_price"], 3) if r["unit_price"] else None,
+                  round(r["cost_month"], 2) if r["cost_month"] else None,
+                  round(r["order_cost"], 2) if r["order_cost"] else None]
         for c, v in enumerate(values, 1):
             cell = _put(ws, i, c, v, border=BOX, alignment=WRAP)
             if r["status"] in _FILL:
                 cell.fill = _FILL[r["status"]]
-    n = 5 + len(rows) + 1
+    n = 5 + len(rows)
+    _put(ws, n, 11, "Totals (estimate)", font=Font(bold=True))
+    _put(ws, n, 12, round(sum(r["cost_month"] or 0 for r in rows), 2) or None, font=Font(bold=True))
+    _put(ws, n, 13, round(sum(r["order_cost"] or 0 for r in rows), 2) or None, font=Font(bold=True))
+    n += 1
     todo = [r for r in rows if r["order_qty"] and r["status"] in ("low", "out")]
     _put(ws, n, 1, "To order" + (": " + ", ".join(f"{r['name']} × {r['order_qty']}" for r in todo) if todo else ": nothing right now"),
          font=Font(bold=True))
     return _bytes(wb)
 
 
-def build_usage_workbook(rows, start, end, profile):
+def build_usage_workbook(rows, start, end, profile, currency="$"):
     wb = Workbook()
     name = profile.get("name") or "Patient"
     days = (end - start).days + 1
     ws = _sheet(wb, "Usage", f"{name} — Medicine usage",
                 f"{start.strftime('%d %b %Y')} to {end.strftime('%d %b %Y')} ({days} days). Scheduled use is an estimate from the reminder schedule.",
-                ["Medication", "Unit", "Opening", "Bought / added", "Scheduled use", "Other use", "Corrections", "Closing", "Avg used / day"],
-                [30, 12, 11, 15, 15, 12, 13, 11, 15], first=True)
+                ["Medication", "Unit", "Opening", "Bought / added", "Scheduled use", "Other use", "Corrections", "Closing", "Avg used / day", f"Est. cost ({currency})"],
+                [30, 12, 11, 15, 15, 12, 13, 11, 15, 16], first=True)
     for i, r in enumerate(rows, 5):
-        for c, v in enumerate([r["name"], r["unit"], r["opening"], r["bought"], r["auto"], r["manual"], r["adjust"], r["closing"], r["per_day"]], 1):
+        for c, v in enumerate([r["name"], r["unit"], r["opening"], r["bought"], r["auto"], r["manual"], r["adjust"], r["closing"], r["per_day"], r["cost"]], 1):
             _put(ws, i, c, v, border=BOX, alignment=WRAP)
     n = 5 + len(rows)
     _put(ws, n, 1, "Total used", font=Font(bold=True))
     _put(ws, n, 5, round(sum(r["auto"] for r in rows), 2), font=Font(bold=True))
     _put(ws, n, 6, round(sum(r["manual"] for r in rows), 2), font=Font(bold=True))
+    _put(ws, n, 10, round(sum(r["cost"] or 0 for r in rows), 2) or None, font=Font(bold=True))
     return _bytes(wb)
 
 

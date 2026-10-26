@@ -33,11 +33,12 @@
   <div class="stat"><span class="num">{{ num(total_auto) }}</span><span class="lbl">Scheduled use</span><span class="sub">tablets, all medicines</span></div>
   <div class="stat"><span class="num">{{ num(total_manual) }}</span><span class="lbl">Other use</span><span class="sub">logged by hand</span></div>
   <div class="stat"><span class="num">{{ num(total_bought) }}</span><span class="lbl">Bought / added</span><span class="sub">tablets, all medicines</span></div>
+  {% if priced %}<div class="stat"><span class="num">{{ money(total_cost) }}</span><span class="lbl">Est. cost of use</span><span class="sub">{{ priced }} medicine{{ 's' if priced != 1 }} priced</span></div>{% endif %}
 </section>
 
 <section class="card">
   <table class="report stock-table">
-    <thead><tr><th scope="col">Medicine</th><th scope="col">Opening</th><th scope="col">Bought / added</th><th scope="col">Scheduled use</th><th scope="col">Other use</th><th scope="col">Corrections</th><th scope="col">Closing</th><th scope="col">Avg used / day</th></tr></thead>
+    <thead><tr><th scope="col">Medicine</th><th scope="col">Opening</th><th scope="col">Bought / added</th><th scope="col">Scheduled use</th><th scope="col">Other use</th><th scope="col">Corrections</th><th scope="col">Closing</th><th scope="col">Avg used / day</th><th scope="col">Est. cost</th></tr></thead>
     <tbody>
       {% for r in report %}
       <tr>
@@ -49,8 +50,9 @@
         <td data-label="Corrections">{{ num(r.adjust) }}</td>
         <td data-label="Closing"><strong>{{ num(r.closing) }}</strong></td>
         <td data-label="Avg used / day">{{ num(r.per_day) }}</td>
+        <td data-label="Est. cost">{% if r.cost is not none %}{{ money(r.cost) }}{% else %}<span class="muted">—</span>{% endif %}</td>
       </tr>
-      {% else %}<tr><td colspan="8" class="muted">No medicine has a stock count yet. Add counts on the <a href="/stock">Stock</a> page.</td></tr>{% endfor %}
+      {% else %}<tr><td colspan="9" class="muted">No medicine has a stock count yet. Add counts on the <a href="/stock">Stock</a> page.</td></tr>{% endfor %}
     </tbody>
   </table>
 </section>
