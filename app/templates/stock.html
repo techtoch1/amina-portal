@@ -68,7 +68,7 @@
       <label>Alert when under (days left) <input name="low_days" type="number" min="1" max="365" value="{{ low_days }}"></label>
       <label>Order enough for (days) <input name="order_days" type="number" min="1" max="365" value="{{ order_days }}"></label>
     </div>
-    {% if stock_number and not alerts_ready %}<p class="warn-text">Alerts can't be sent yet: Wbiztool must be connected and confirmed in <a href="/settings">Settings</a>.</p>{% endif %}
+    {% if stock_number and not alerts_ready %}<p class="warn-text">Alerts can't be sent yet: Wbiztool must be connected and confirmed in {% if role == 'owner' %}<a href="/settings">Settings</a>{% else %}Settings (ask the owner){% endif %}.</p>{% endif %}
     <p id="alert-result" role="status"></p>
     <div class="row">
       <button class="btn primary" type="submit">Save</button>

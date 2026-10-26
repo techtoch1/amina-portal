@@ -21,13 +21,16 @@
 <a class="skip" href="#main">Skip to content</a>
 <header class="appbar noprint">
   <div class="brand"><span class="logo" aria-hidden="true">{{ icon('pill') }}</span><span dir="auto">{{ profile.get('name') or 'Medicine reminders' }}</span></div>
-  {% if role == 'owner' %}
+  {% if role in ('owner', 'admin') %}
   <nav class="nav" aria-label="Main">
     <a href="/medicines" {% if active == 'medicines' %}aria-current="page"{% endif %}>{{ icon('pill') }}<span>Medicines</span>{% if pending %}<b class="dot" aria-label="{{ pending }} changes waiting"></b>{% endif %}</a>
     <a href="/stock" {% if active == 'stock' %}aria-current="page"{% endif %}>{{ icon('box') }}<span>Stock</span>{% if stock_attention %}<b class="dot" aria-label="{{ stock_attention }} medicines low"></b>{% endif %}</a>
     <a href="/reminders" {% if active == 'reminders' %}aria-current="page"{% endif %}>{{ icon('report') }}<span>Reminders</span></a>
     <a href="/mom" {% if active == 'mom' %}aria-current="page"{% endif %}>{{ icon('heart') }}<span>Mom</span></a>
+    {% if role == 'owner' %}
+    <a href="/activity" {% if active == 'activity' %}aria-current="page"{% endif %}>{{ icon('report') }}<span>Activity</span></a>
     <a href="/settings" {% if active == 'settings' %}aria-current="page"{% endif %}>{{ icon('sliders') }}<span>Settings</span>{% if not configured %}<b class="dot" aria-label="Setup needed"></b>{% endif %}</a>
+    {% endif %}
   </nav>
   {% else %}
   <nav class="nav" aria-label="Main">

@@ -7,6 +7,7 @@ import logging
 import math
 import re
 import secrets
+import sqlite3
 import threading
 import time as _time
 from contextlib import asynccontextmanager
@@ -24,7 +25,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from .arabic import arabic_dose, fill_row, gaps as arabic_gaps, FIELD_LABELS
 from .config import Settings
 from .export import build_doctor_workbook, build_stock_workbook, build_usage_workbook
-from .db import DB
+from .db import DB, now_iso
 from .excel import classify_frequency, details_from_form, load_from_db, norm, read_sheet, rec_to_form, schedule_to_rec
 from .schedule import cron_human, next_cron_fire, next_injections, today_agenda
 from .messages import COPY_NOTE
@@ -113,6 +114,70 @@ def create_app(settings=None, client=None):
     logging.getLogger("wbiztool").addFilter(_Redact(settings))
 
     app = FastAPI(title="Medicine reminders", docs_url=None, redoc_url=None, openapi_url=None)
+
+    AUDIT = [  # (method, path pattern, what to show); anything else that changes data is shown as METHOD path
+        ("POST", r"/api/medicines", "Added a medicine"), ("PUT", r"/api/medicines/(\d+)", "Edited a medicine"),
+        ("DELETE", r"/api/medicines/(\d+)", "Deleted a medicine"), ("POST", r"/api/medicines/(\d+)/reminder", "Changed a medicine's reminder"),
+        ("POST", r"/api/medicines-import", "Imported medicines from Excel"), ("POST", r"/api/arabic/fill", "Filled Arabic from the glossary"),
+        ("POST", r"/api/reminders/clear", "Turned off all reminders"), ("POST", r"/api/sync/apply", "Applied reminder changes on Wbiztool"),
+        ("POST", r"/api/wbiz/cancel", "Cancelled reminders on Wbiztool (clean-up)"),
+        ("POST", r"/api/test-reminder", "Sent a test reminder"), ("POST", r"/api/test-message", "Sent a test message"),
+        ("PUT", r"/api/stock/(\d+)/settings", "Changed stock settings"), ("POST", r"/api/stock/(\d+)/move", "Changed stock"),
+        ("POST", r"/api/stock/import", "Imported stock counts"), ("PUT", r"/api/stock/settings", "Changed stock alert settings"),
+        ("POST", r"/api/stock/check-alerts", "Checked stock alerts"), ("POST", r"/api/stock/test-alert", "Sent a test stock alert"),
+        ("PUT", r"/api/profile", "Edited Mom's profile"), ("POST", r"/api/status-log", "Added a log entry"),
+        ("DELETE", r"/api/status-log/(\d+)", "Deleted a log entry"), ("DELETE", r"/api/status-log", "Cleared Mom's log"),
+        ("POST", r"/api/mom-import", "Imported Mom's profile and log"),
+        ("PUT", r"/api/config", "Changed Wbiztool settings"), ("PUT", r"/api/slots", "Changed default times"),
+        ("PUT", r"/api/message-options", "Changed message options"), ("POST", r"/api/settings", "Changed settings"),
+        ("PUT", r"/api/family-access", "Set the family password"), ("DELETE", r"/api/family-access", "Turned off family access"),
+        ("POST", r"/api/users", "Added an admin"), ("PUT", r"/api/users/(\d+)", "Changed an admin"), ("DELETE", r"/api/users/(\d+)", "Removed an admin"),
+        ("GET", r"/medicines/export\.xlsx", "Downloaded the medicines Excel"), ("GET", r"/stock/export\.xlsx", "Downloaded the stock Excel"),
+        ("GET", r"/stock/report\.xlsx", "Downloaded the usage report"), ("GET", r"/reminders/export\.csv", "Downloaded the reminders CSV"),
+        ("GET", r"/api/mom-export", "Downloaded Mom's profile and log"), ("GET", r"/activity/export\.csv", "Downloaded the activity CSV"),
+    ]
+    QUIET = {("POST", "/api/sync/preview"), ("POST", "/api/wbiz/reminders"), ("POST", "/api/config/test"), ("POST", "/api/logout")}
+
+    def _audit_target(method, path):
+        """-> (label, medicine/entry name) or None when the request is not worth recording."""
+        if (method, path) in QUIET or (method == "GET" and not path.endswith((".xlsx", ".csv", "/api/mom-export"))):
+            return None
+        if method not in ("GET", "POST", "PUT", "DELETE", "PATCH") or not (path.startswith("/api/") or method == "GET"):
+            return None
+        for m, pattern, label in AUDIT:
+            hit = m == method and re.fullmatch(pattern, path)
+            if hit:
+                what = ""
+                if hit.groups():
+                    ident = int(hit.group(1))
+                    if "/status-log" in path:
+                        row = next((r for r in db.list_status(5000) if r["id"] == ident), None)
+                        what = f"{row['kind']}: {row['value'] or row['note']}"[:80] if row else ""
+                    elif "/users" in path:
+                        user = db.get_user(ident)
+                        what = user["name"] if user else ""
+                    else:
+                        med = next((r for r in db.list_medicines() if r["id"] == ident), None)
+                        what = med["name"] if med else ""
+                return label, what
+        return f"{method} {path}", ""
+
+    @app.middleware("http")
+    async def audit(request, call_next):
+        target = _audit_target(request.method, request.url.path)
+        resp = await call_next(request)
+        session = request.scope.get("session") or {}
+        if target and session.get("ok") and (resp.status_code < 400 or (resp.status_code == 403 and session.get("role") == "admin")):
+            who, role = actor_of(request)
+            label, what = target
+            detail = " — ".join(x for x in (what, getattr(request.state, "detail", "")) if x)
+            if resp.status_code >= 400:
+                label, detail = "Blocked: " + label, "not allowed for this account"
+            try:
+                db.add_activity(who, role, label, detail, request.client.host if request.client else "")
+            except Exception:  # the trail must never break a request
+                logging.getLogger("amina").exception("could not record activity")
+        return resp
     app.add_middleware(SessionMiddleware, secret_key=settings.secret_key, https_only=settings.cookie_secure,
                        same_site="lax", max_age=7 * 24 * 3600, session_cookie="mr_session")
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
@@ -139,17 +204,35 @@ def create_app(settings=None, client=None):
     async def not_owner(request, exc):
         if request.url.path.startswith("/api/") or request.url.path.endswith((".csv", ".xlsx")):
             return JSONResponse({"error": "Not allowed"}, status_code=403)
-        return RedirectResponse("/family", status_code=303)
+        return RedirectResponse("/medicines" if request.session.get("role") == "admin" else "/family", status_code=303)
 
     def auth_any(request: Request):
         if not request.session.get("ok"):
             raise NeedLogin()
+        if request.session.get("role") == "admin":  # an admin who was turned off or removed is signed out at once
+            user = db.get_user(request.session.get("uid"))
+            if not user or not user["active"]:
+                request.session.clear()
+                raise NeedLogin()
+
+    def editor(request: Request):
+        """Owner or admin: everything except Settings, accounts and the activity trail."""
+        auth_any(request)
+        if request.session.get("role", "owner") not in ("owner", "admin"):
+            raise NotOwner()
 
     def auth(request: Request):
         """Owner only (sessions created before roles existed were all the owner)."""
         auth_any(request)
         if request.session.get("role", "owner") != "owner":
             raise NotOwner()
+
+    def actor_of(request):
+        role = request.session.get("role", "owner")
+        return request.session.get("actor") or ("Owner" if role == "owner" else "Family"), role
+
+    def audit_note(request, text):
+        request.state.detail = text  # shown next to the action in the activity trail
 
     def csrf(request: Request):
         sent = request.headers.get("x-csrf-token", "")
@@ -197,16 +280,27 @@ def create_app(settings=None, client=None):
         owner_ok = hmac.compare_digest(password.encode(), settings.dashboard_password.encode())
         stored = db.get_setting(FAMILY_KEY)
         family_ok = bool(stored) and _check_password(password, stored) and not owner_ok
-        if owner_ok or family_ok:
+        admin = None
+        if not owner_ok and not family_ok and password:
+            admin = next((u for u in db.list_users() if u["active"] and _check_password(password, u["hash"])), None)
+        if owner_ok or family_ok or admin:
             failures.pop(ip, None)
             request.session.clear()
-            request.session.update(ok=True, role="owner" if owner_ok else "family", csrf=secrets.token_urlsafe(24))
+            who = "Owner" if owner_ok else admin["name"] if admin else "Family"
+            request.session.update(ok=True, role="owner" if owner_ok else "admin" if admin else "family", actor=who,
+                                   csrf=secrets.token_urlsafe(24), **({"uid": admin["id"]} if admin else {}))
+            if admin:
+                db.update_user(admin["id"], last_login=now_iso())
+            db.add_activity(who, request.session["role"], "Signed in", ip=ip)
             return RedirectResponse("/", status_code=303)
+        db.add_activity("(not signed in)", "none", "Failed sign-in", ip=ip)
         failures[ip] = [count + 1, first]
         return templates.TemplateResponse(request, "login.html", {"error": "Wrong password."}, status_code=401)
 
     @app.post("/logout")
     def logout(request: Request, _=Depends(csrf)):
+        who, role = actor_of(request)
+        db.add_activity(who, role, "Signed out")
         request.session.clear()
         return JSONResponse({"ok": True})
 
@@ -288,9 +382,9 @@ def create_app(settings=None, client=None):
 
     @app.get("/", dependencies=[Depends(auth_any)])
     def home(request: Request):
-        return RedirectResponse("/medicines" if request.session.get("role", "owner") == "owner" else "/family", status_code=303)
+        return RedirectResponse("/family" if request.session.get("role") == "family" else "/medicines", status_code=303)
 
-    @app.get("/medicines", response_class=HTMLResponse, dependencies=[Depends(auth)])
+    @app.get("/medicines", response_class=HTMLResponse, dependencies=[Depends(editor)])
     def medicines_page(request: Request, lang: str = "en"):
         lang = lang if lang in LABELS else "en"
         _res, now, groups = table_groups(lang)
@@ -336,7 +430,7 @@ def create_app(settings=None, client=None):
             "L": LABELS[lang], "profile": db.profile(), "log": past, "upcoming": upcoming, "latest": latest,
             "active": "family_log"})
 
-    @app.get("/mom", response_class=HTMLResponse, dependencies=[Depends(auth)])
+    @app.get("/mom", response_class=HTMLResponse, dependencies=[Depends(editor)])
     def mom_page(request: Request):
         today, past, upcoming, latest = log_view()
         return templates.TemplateResponse(request, "mom.html", base_ctx(
@@ -349,7 +443,7 @@ def create_app(settings=None, client=None):
         with_purpose = include_purpose(db)
         example = build_message([sample], with_purpose=with_purpose) if sample else ""
         return templates.TemplateResponse(request, "settings.html", base_ctx(
-            request, "settings", conf=_config_view(), family_enabled=bool(db.get_setting(FAMILY_KEY)),
+            request, "settings", conf=_config_view(), family_enabled=bool(db.get_setting(FAMILY_KEY)), users=db.list_users(),
             with_purpose=with_purpose, example_message=example))
 
     def _reminder_rows():
@@ -365,7 +459,7 @@ def create_app(settings=None, client=None):
                          "message": r["message"], "kind": r["kind"], "fingerprint": r["fingerprint"]})
         return sorted(rows, key=lambda x: (x["next"] is None, x["next"] or now, x["recipient"]))
 
-    @app.get("/reminders", response_class=HTMLResponse, dependencies=[Depends(auth)])
+    @app.get("/reminders", response_class=HTMLResponse, dependencies=[Depends(editor)])
     def reminders_page(request: Request, show: str = "all", review: int = 0):
         rows = _reminder_rows()
         since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="seconds")
@@ -394,7 +488,7 @@ def create_app(settings=None, client=None):
             raise HTTPException(400, "Choose a range of up to 2 years, with the start before the end")
         return start, end
 
-    @app.get("/stock", response_class=HTMLResponse, dependencies=[Depends(auth)])
+    @app.get("/stock", response_class=HTMLResponse, dependencies=[Depends(editor)])
     def stock_page(request: Request):
         rows = stock_overview()
         low, order = stock_limits()
@@ -404,7 +498,7 @@ def create_app(settings=None, client=None):
             to_order=[r for r in rows if r["order_qty"] and r["status"] in ("low", "out")],
             stock_number=settings.stock_number, alerts_ready=bool(settings.stock_number and settings.wbiz_configured and settings.docs_verified)))
 
-    @app.get("/stock/report", response_class=HTMLResponse, dependencies=[Depends(auth)])
+    @app.get("/stock/report", response_class=HTMLResponse, dependencies=[Depends(editor)])
     def stock_report_page(request: Request, preset: str = "30", start: str = "", end: str = ""):
         now = local_now(settings)
         a, b = _range(preset, start, end, now.date())
@@ -416,7 +510,7 @@ def create_app(settings=None, client=None):
             days=(b - a).days + 1, num=stk.num, plural=stk.plural, total_auto=round(sum(r["auto"] for r in report), 2),
             total_manual=round(sum(r["manual"] for r in report), 2), total_bought=round(sum(r["bought"] for r in report), 2)))
 
-    @app.get("/stock/export.xlsx", dependencies=[Depends(auth)])
+    @app.get("/stock/export.xlsx", dependencies=[Depends(editor)])
     def stock_export():
         now = local_now(settings)
         low, order = stock_limits()
@@ -424,7 +518,7 @@ def create_app(settings=None, client=None):
         return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition": f'attachment; filename="Medicine_stock_{now.strftime("%Y-%m-%d")}.xlsx"'})
 
-    @app.get("/stock/report.xlsx", dependencies=[Depends(auth)])
+    @app.get("/stock/report.xlsx", dependencies=[Depends(editor)])
     def stock_report_export(preset: str = "30", start: str = "", end: str = ""):
         now = local_now(settings)
         a, b = _range(preset, start, end, now.date())
@@ -434,7 +528,7 @@ def create_app(settings=None, client=None):
         return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition": f'attachment; filename="Medicine_usage_{a.isoformat()}_to_{b.isoformat()}.xlsx"'})
 
-    @app.get("/medicines/export.xlsx", dependencies=[Depends(auth)])
+    @app.get("/medicines/export.xlsx", dependencies=[Depends(editor)])
     def medicines_xlsx():
         """The medicines exactly as they are in the dashboard, laid out for a doctor to confirm."""
         data = build_doctor_workbook(db, settings, local_now(settings))
@@ -442,7 +536,7 @@ def create_app(settings=None, client=None):
         return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition": f'attachment; filename="Medicines_for_doctor_review_{stamp}.xlsx"'})
 
-    @app.get("/reminders/export.csv", dependencies=[Depends(auth)])
+    @app.get("/reminders/export.csv", dependencies=[Depends(editor)])
     def reminders_csv():
         buf = io.StringIO()
         w = csv.writer(buf)
@@ -461,7 +555,7 @@ def create_app(settings=None, client=None):
             return None
         return x if math.isfinite(x) and low <= x <= high else None
 
-    @app.get("/api/stock/{mid}", dependencies=[Depends(auth)])
+    @app.get("/api/stock/{mid}", dependencies=[Depends(editor)])
     def stock_detail(mid: int):
         row = _med_or_404(mid)
         by_id, _rows = stock_parsed()
@@ -474,7 +568,7 @@ def create_app(settings=None, client=None):
                 "moves": [{"day": x["day"], "kind": stk.KINDS.get(x["kind"], x["kind"]), "qty": x["qty"], "note": x["note"]}
                           for x in db.moves(mid, 25)]}
 
-    @app.put("/api/stock/{mid}/settings", dependencies=[Depends(auth), Depends(csrf)])
+    @app.put("/api/stock/{mid}/settings", dependencies=[Depends(editor), Depends(csrf)])
     async def stock_item_settings(mid: int, request: Request):
         _med_or_404(mid)
         body = await request.json()
@@ -494,7 +588,7 @@ def create_app(settings=None, client=None):
         db.update_stock_item(mid, units_per_dose=upd, daily_use=daily, tracking=1 if body.get("tracking", True) else 0, unit=unit)
         return {"ok": True}
 
-    @app.post("/api/stock/{mid}/move", dependencies=[Depends(auth), Depends(csrf)])
+    @app.post("/api/stock/{mid}/move", dependencies=[Depends(editor), Depends(csrf)])
     async def stock_move(mid: int, request: Request):
         """kind: buy (add stock), used (taken outside the schedule), count (set the number actually on hand)."""
         row = _med_or_404(mid)
@@ -532,9 +626,11 @@ def create_app(settings=None, client=None):
                 db.update_stock_item(mid, through_day=day.isoformat())
             db.add_move(mid, day.isoformat(), kind, qty if kind == "buy" else -qty, note)
         db.log_event("stock", True, f"{row['name']}: {kind} {stk.num(qty)}")
+        verb = {"buy": "bought", "used": "used", "count": "counted"}[kind]
+        audit_note(request, f"{verb} {stk.num(qty)} ({day.isoformat()})" + (f" — {note}" if note else ""))
         return {"ok": True}
 
-    @app.post("/api/stock/import", dependencies=[Depends(auth), Depends(csrf)])
+    @app.post("/api/stock/import", dependencies=[Depends(editor), Depends(csrf)])
     def stock_import(file: UploadFile = File(...)):
         raw = file.file.read(MAX_UPLOAD + 1)
         if len(raw) > MAX_UPLOAD:
@@ -549,7 +645,7 @@ def create_app(settings=None, client=None):
         db.log_event("stock", True, f"Counts imported: {len(res['applied'])} set")
         return res
 
-    @app.put("/api/stock/settings", dependencies=[Depends(auth), Depends(csrf)])
+    @app.put("/api/stock/settings", dependencies=[Depends(editor), Depends(csrf)])
     async def stock_settings(request: Request):
         body = await request.json()
         low, order = _finite(body.get("low_days"), 1, 365), _finite(body.get("order_days"), 1, 365)
@@ -564,7 +660,7 @@ def create_app(settings=None, client=None):
         settings.apply_overrides(db)
         return {"ok": True, "stock_number": number}
 
-    @app.post("/api/stock/check-alerts", dependencies=[Depends(auth), Depends(csrf)])
+    @app.post("/api/stock/check-alerts", dependencies=[Depends(editor), Depends(csrf)])
     def stock_check_alerts():
         if not settings.stock_number:
             raise HTTPException(400, "Enter the stock alert number first")
@@ -574,7 +670,7 @@ def create_app(settings=None, client=None):
         sent, new = stk.check_alerts(client, settings, db, by_id, rows, now)
         return {"sent": sent, "pending": [r["name"] for r in new]}
 
-    @app.post("/api/stock/test-alert", dependencies=[Depends(auth), Depends(csrf)])
+    @app.post("/api/stock/test-alert", dependencies=[Depends(editor), Depends(csrf)])
     async def stock_test_alert(request: Request):
         if (await request.json()).get("confirm") is not True:
             raise HTTPException(400, "Confirm that you want to send a message to the alert number")
@@ -607,13 +703,13 @@ def create_app(settings=None, client=None):
             fields["frequency"] = "chart only"
         return False
 
-    @app.get("/api/medicines/{mid}", dependencies=[Depends(auth)])
+    @app.get("/api/medicines/{mid}", dependencies=[Depends(editor)])
     def get_medicine(mid: int):
         form = rec_to_form(_med_or_404(mid))
         form["suggest"] = suggestion(form, slots())
         return form
 
-    @app.post("/api/medicines", dependencies=[Depends(auth), Depends(csrf)])
+    @app.post("/api/medicines", dependencies=[Depends(editor), Depends(csrf)])
     async def add_medicine(request: Request):
         body = await request.json()
         fields, err = details_from_form(body)
@@ -622,7 +718,7 @@ def create_app(settings=None, client=None):
         _apply_section(fields, body.get("section"))
         return {"id": db.add_medicine(fields)}
 
-    @app.put("/api/medicines/{mid}", dependencies=[Depends(auth), Depends(csrf)])
+    @app.put("/api/medicines/{mid}", dependencies=[Depends(editor), Depends(csrf)])
     async def edit_medicine(mid: int, request: Request):
         row = _med_or_404(mid)
         body = await request.json()
@@ -632,14 +728,17 @@ def create_app(settings=None, client=None):
         if "section" in body:
             if _apply_section(fields, body["section"], row["frequency"]):
                 db.set_remind(mid, False)
+        changed = [f"{k}: {str(row[k])[:40]!r} → {str(v)[:40]!r}" for k, v in fields.items() if k in row.keys() and str(row[k]) != str(v)]
+        audit_note(request, "; ".join(changed)[:400] or "no change")
         db.update_medicine(mid, fields)
         return {"ok": True}
 
-    @app.post("/api/medicines/{mid}/reminder", dependencies=[Depends(auth), Depends(csrf)])
+    @app.post("/api/medicines/{mid}/reminder", dependencies=[Depends(editor), Depends(csrf)])
     async def medicine_reminder(mid: int, request: Request):
         row = _med_or_404(mid)
         body = await request.json()
         if not body.get("on"):
+            audit_note(request, "switched off")
             db.set_remind(mid, False)
             return {"ok": True, "remind": False}
         merged = rec_to_form(row)
@@ -651,9 +750,10 @@ def create_app(settings=None, client=None):
             raise HTTPException(400, "Choose how often the reminder repeats")
         db.update_medicine(mid, sched)
         db.set_remind(mid, True)
+        audit_note(request, "switched on: " + str(sched.get("frequency", "")) + " " + ", ".join(body.get("times") or []))
         return {"ok": True, "remind": True}
 
-    @app.post("/api/arabic/fill", dependencies=[Depends(auth), Depends(csrf)])
+    @app.post("/api/arabic/fill", dependencies=[Depends(editor), Depends(csrf)])
     def fill_arabic():
         """Fill EMPTY Arabic fields from the glossary; report what was filled and what still needs a person."""
         filled, missing = [], []
@@ -668,7 +768,7 @@ def create_app(settings=None, client=None):
         db.log_event("settings", True, f"Arabic fill: {len(filled)} filled, {len(missing)} still missing")
         return {"filled": filled, "missing": missing}
 
-    @app.post("/api/reminders/clear", dependencies=[Depends(auth), Depends(csrf)])
+    @app.post("/api/reminders/clear", dependencies=[Depends(editor), Depends(csrf)])
     def clear_reminders():
         """Turn every reminder off. Wbiztool is not touched: the cancellations are previewed and approved
         in Review & apply like any other change."""
@@ -683,7 +783,7 @@ def create_app(settings=None, client=None):
             raise HTTPException(400, "That WhatsApp client is not valid")
         return wc or None
 
-    @app.post("/api/wbiz/reminders", dependencies=[Depends(auth), Depends(csrf)])
+    @app.post("/api/wbiz/reminders", dependencies=[Depends(editor), Depends(csrf)])
     async def wbiz_reminders(request: Request):
         wc = _client_override(await request.json())
         try:
@@ -697,7 +797,7 @@ def create_app(settings=None, client=None):
         raw = json.dumps(data, ensure_ascii=False)[:3000]
         return {"items": items, "client": wc or settings.whatsapp_client, "raw": raw if not items else ""}
 
-    @app.post("/api/wbiz/cancel", dependencies=[Depends(auth), Depends(csrf)])
+    @app.post("/api/wbiz/cancel", dependencies=[Depends(editor), Depends(csrf)])
     async def wbiz_cancel(request: Request):
         body = await request.json()
         wc = _client_override(body)
@@ -725,15 +825,16 @@ def create_app(settings=None, client=None):
                 db.end_reminder(mine[rid]["id"], "cancelled")
             results.append({"id": rid, "ok": True})
             db.log_event("cancel", True, f"cleanup: cancelled {rid} on Wbiztool")
+        audit_note(request, f"{sum(1 for r in results if r['ok'])} of {len(ids)} cancelled" + (f" on client {wc}" if wc else ""))
         return {"results": results, "not_attempted": len(ids) - len(results)}
 
-    @app.delete("/api/medicines/{mid}", dependencies=[Depends(auth), Depends(csrf)])
+    @app.delete("/api/medicines/{mid}", dependencies=[Depends(editor), Depends(csrf)])
     def delete_medicine(mid: int):
         _med_or_404(mid)
         db.delete_medicine(mid)
         return {"ok": True}
 
-    @app.post("/api/medicines-import", dependencies=[Depends(auth), Depends(csrf)])
+    @app.post("/api/medicines-import", dependencies=[Depends(editor), Depends(csrf)])
     def import_medicines(replace: bool = False, file: UploadFile = File(...)):
         raw = file.file.read(MAX_UPLOAD + 1)
         if len(raw) > MAX_UPLOAD:
@@ -758,7 +859,7 @@ def create_app(settings=None, client=None):
         return {"added": added, "skipped": skipped, "stock_counts": stocked}
 
     # ---- sync with Wbiztool ----
-    @app.post("/api/sync/preview", dependencies=[Depends(auth), Depends(csrf)])
+    @app.post("/api/sync/preview", dependencies=[Depends(editor), Depends(csrf)])
     def preview():
         if not settings.mom_number:
             raise HTTPException(400, "Mom's number is not set (Wbiztool settings)")
@@ -766,7 +867,7 @@ def create_app(settings=None, client=None):
             raise HTTPException(400, "Your number is not set (Wbiztool settings), or untick the copy option")
         return plan_to_json(compute_plan(settings, db, planning_meds()))
 
-    @app.post("/api/sync/apply", dependencies=[Depends(auth), Depends(csrf)])
+    @app.post("/api/sync/apply", dependencies=[Depends(editor), Depends(csrf)])
     async def apply(request: Request):
         body = await request.json()
         try:
@@ -774,6 +875,8 @@ def create_app(settings=None, client=None):
         except WbizError as exc:
             return JSONResponse({"error": str(exc)}, status_code=409)
         cache["status"] = (0, None)
+        failed = [r for r in results if not r["ok"]]
+        audit_note(request, f"{len(results) - len(failed)} done, {len(failed)} failed: " + "; ".join(r["action"] for r in results)[:300])
         return {"results": results}
 
     @app.post("/api/settings", dependencies=[Depends(auth), Depends(csrf)])
@@ -783,7 +886,7 @@ def create_app(settings=None, client=None):
         return {"ok": True}
 
     # ---- Wbiztool status, test, credentials ----
-    @app.get("/api/status", dependencies=[Depends(auth)])
+    @app.get("/api/status", dependencies=[Depends(editor)])
     def status():
         ts, cached = cache["status"]
         if cached and _time.time() - ts < 30:
@@ -821,7 +924,7 @@ def create_app(settings=None, client=None):
 
     test_gate = {"last": 0.0}
 
-    @app.post("/api/test-reminder", dependencies=[Depends(auth), Depends(csrf)])
+    @app.post("/api/test-reminder", dependencies=[Depends(editor), Depends(csrf)])
     async def test_reminder(request: Request):
         """Send one of the app's own reminder messages as a test: to ME (default) or, after confirmation, to Mom."""
         body = await request.json()
@@ -934,6 +1037,8 @@ def create_app(settings=None, client=None):
             raise HTTPException(400, "The family password must be at least 8 characters")
         if hmac.compare_digest(password.encode(), settings.dashboard_password.encode()):
             raise HTTPException(400, "It must be different from your own password")
+        if any(_check_password(password, u["hash"]) for u in db.list_users()):
+            raise HTTPException(400, "It must be different from every admin's password")
         db.set_setting(FAMILY_KEY, _hash_password(password))
         db.log_event("settings", True, "Family password set")
         return {"enabled": True}
@@ -944,14 +1049,100 @@ def create_app(settings=None, client=None):
         db.log_event("settings", True, "Family access turned off")
         return {"enabled": False}
 
-    # ---- mom: profile and status log ----
-    @app.put("/api/profile", dependencies=[Depends(auth), Depends(csrf)])
-    async def save_profile(request: Request):
+    # ---- admin accounts (owner only) and the activity trail ----
+    def _password_problem(password, skip_id=None):
+        """Passwords identify who signs in, so each one must be unique."""
+        if len(password) < 8:
+            return "The password must be at least 8 characters"
+        if len(password) > 200:
+            return "The password is too long"
+        if hmac.compare_digest(password.encode(), settings.dashboard_password.encode()):
+            return "That is the owner password — choose a different one"
+        stored = db.get_setting(FAMILY_KEY)
+        if stored and _check_password(password, stored):
+            return "That is the family password — choose a different one"
+        if any(u["id"] != skip_id and _check_password(password, u["hash"]) for u in db.list_users()):
+            return "Another admin already uses that password — choose a different one"
+        return ""
+
+    def _user_or_404(uid):
+        user = db.get_user(uid)
+        if not user:
+            raise HTTPException(404, "Not found")
+        return user
+
+    @app.post("/api/users", dependencies=[Depends(auth), Depends(csrf)])
+    async def add_user(request: Request):
         body = await request.json()
-        db.set_profile({k: str(body.get(k) or "").strip()[:lim] for k, lim in PROFILE_FIELDS.items() if k in body})
+        name = " ".join(str(body.get("name") or "").split())
+        if not 2 <= len(name) <= 40 or not all(ch.isalnum() or ch in " .-_" for ch in name):
+            raise HTTPException(400, "Enter a name of 2–40 letters or digits")
+        if name.lower() in ("owner", "family", "(not signed in)"):
+            raise HTTPException(400, "That name is reserved")
+        if len(db.list_users()) >= 20:
+            raise HTTPException(400, "That is enough admins (20 max)")
+        password = str(body.get("password") or "")
+        problem = _password_problem(password)
+        if problem:
+            raise HTTPException(400, problem)
+        try:
+            uid = db.add_user(name, _hash_password(password))
+        except sqlite3.IntegrityError:
+            raise HTTPException(400, "There is already an admin with that name")
+        return {"id": uid}
+
+    @app.put("/api/users/{uid}", dependencies=[Depends(auth), Depends(csrf)])
+    async def change_user(uid: int, request: Request):
+        _user_or_404(uid)
+        body = await request.json()
+        if "password" in body:
+            password = str(body.get("password") or "")
+            problem = _password_problem(password, uid)
+            if problem:
+                raise HTTPException(400, problem)
+            db.update_user(uid, hash=_hash_password(password))
+        if "active" in body:
+            db.update_user(uid, active=1 if body["active"] else 0)
         return {"ok": True}
 
-    @app.post("/api/status-log", dependencies=[Depends(auth), Depends(csrf)])
+    @app.delete("/api/users/{uid}", dependencies=[Depends(auth), Depends(csrf)])
+    def remove_user(uid: int):
+        _user_or_404(uid)
+        db.delete_user(uid)  # their past activity stays in the trail
+        return {"ok": True}
+
+    ACTIVITY_PAGE = 50
+
+    @app.get("/activity", response_class=HTMLResponse, dependencies=[Depends(auth)])
+    def activity_page(request: Request, user: str = "", page: int = 1):
+        page = max(page, 1)
+        rows, total = db.list_activity(user, ACTIVITY_PAGE, (page - 1) * ACTIVITY_PAGE)
+        return templates.TemplateResponse(request, "activity.html", base_ctx(
+            request, "activity", rows=rows, total=total, user=user, page=page, pages=max(1, -(-total // ACTIVITY_PAGE)),
+            actors=db.activity_actors()))
+
+    @app.get("/activity/export.csv", dependencies=[Depends(auth)])
+    def activity_csv(user: str = ""):
+        rows, _total = db.list_activity(user, 20000, 0)
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["When", "Who", "Role", "What", "Details", "IP"])
+        for r in rows:
+            w.writerow([local_str(r["ts"]), _csv_cell(r["actor"]), r["role"], _csv_cell(r["action"]), _csv_cell(r["detail"]), r["ip"]])
+        return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": 'attachment; filename="activity.csv"'})
+
+    # ---- mom: profile and status log ----
+    @app.put("/api/profile", dependencies=[Depends(editor), Depends(csrf)])
+    async def save_profile(request: Request):
+        body = await request.json()
+        new = {k: str(body.get(k) or "").strip()[:lim] for k, lim in PROFILE_FIELDS.items() if k in body}
+        before = db.profile()
+        audit_note(request, "changed: " + (", ".join(k for k, v in new.items() if before.get(k, "") != v) or "nothing"))
+        db.set_profile(new)
+        return {"ok": True}
+
+    @app.post("/api/status-log", dependencies=[Depends(editor), Depends(csrf)])
     async def add_status(request: Request):
         body = await request.json()
         kind = body.get("kind")
@@ -972,13 +1163,14 @@ def create_app(settings=None, client=None):
         if raw_time and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", raw_time):
             raise HTTPException(400, "That time is not valid")
         db.add_status(kind, value, note, when.isoformat(), raw_time)
+        audit_note(request, f"{kind}: {value or note} ({when.isoformat()})")
         return {"ok": True}
 
     # ---- import / export of the profile and log (backup, or filling them in from a file) ----
     def _valid_time(t):
         return bool(re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", t))
 
-    @app.get("/api/mom-export", dependencies=[Depends(auth)])
+    @app.get("/api/mom-export", dependencies=[Depends(editor)])
     def mom_export():
         log = [{"kind": r["kind"], "date": r["event_date"], "time": r["event_time"], "value": r["value"], "note": r["note"]}
                for r in reversed(db.list_status(5000))]
@@ -986,7 +1178,7 @@ def create_app(settings=None, client=None):
         return Response(body, media_type="application/json; charset=utf-8",
                         headers={"Content-Disposition": 'attachment; filename="mom-profile-and-log.json"'})
 
-    @app.post("/api/mom-import", dependencies=[Depends(auth), Depends(csrf)])
+    @app.post("/api/mom-import", dependencies=[Depends(editor), Depends(csrf)])
     async def mom_import(request: Request, overwrite: bool = False):
         """Add profile fields and log entries from a JSON file. Everything is checked first; nothing is
         imported if any entry is invalid. Profile fields that already have text are kept unless overwrite=true."""
@@ -1048,13 +1240,13 @@ def create_app(settings=None, client=None):
         return {"profile_fields": len(applied), "profile_kept": len(prof) - len(applied), "log_added": added,
                 "log_skipped": skipped, "ignored": ignored}
 
-    @app.delete("/api/status-log/{sid}", dependencies=[Depends(auth), Depends(csrf)])
+    @app.delete("/api/status-log/{sid}", dependencies=[Depends(editor), Depends(csrf)])
     def delete_status(sid: int):
         if not db.delete_status(sid):
             raise HTTPException(404, "Not found")
         return {"ok": True}
 
-    @app.delete("/api/status-log", dependencies=[Depends(auth), Depends(csrf)])
+    @app.delete("/api/status-log", dependencies=[Depends(editor), Depends(csrf)])
     def clear_status():
         return {"deleted": db.clear_status()}
 

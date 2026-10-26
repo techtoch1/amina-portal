@@ -2,9 +2,9 @@
 {% block title %}Medicines{% endblock %}
 {% block body %}
 {% if not configured %}
-<div class="notice warn noprint">Wbiztool isn't connected yet — reminders can't be sent. <a href="/settings">Set it up in Settings →</a></div>
+<div class="notice warn noprint">Wbiztool isn't connected yet — reminders can't be sent. {% if role == 'owner' %}<a href="/settings">Set it up in Settings →</a>{% else %}Ask the owner to set it up.{% endif %}</div>
 {% elif not verified %}
-<div class="notice warn noprint">Sending is paused until you confirm the Wbiztool endpoint paths. <a href="/settings">Open Settings →</a></div>
+<div class="notice warn noprint">Sending is paused until you confirm the Wbiztool endpoint paths. {% if role == 'owner' %}<a href="/settings">Open Settings →</a>{% else %}Ask the owner.{% endif %}</div>
 {% endif %}
 
 {% if arabic_missing %}

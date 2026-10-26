@@ -482,6 +482,25 @@
       if (ok) { toastNext('Family access is on. Share the /family page and the password.'); location.reload(); }
       else say($('family-result'), false, data.error);
     };
+    $('user-form').onsubmit = async (e) => {
+      e.preventDefault(); const f = e.target;
+      const {ok, data} = await call('POST', '/api/users', {name: f.name.value, password: f.password.value});
+      if (ok) { toastNext('Admin added. They sign in with their password on the normal sign-in page.'); location.reload(); }
+      else say($('user-result'), false, data.error);
+    };
+    document.querySelectorAll('[data-user-pw]').forEach((b) => b.onclick = async () => {
+      const pw = prompt('New password for ' + b.dataset.name + ' (8+ characters):');
+      if (!pw) return;
+      const {ok, data} = await call('PUT', '/api/users/' + b.dataset.userPw, {password: pw});
+      if (ok) toast('Password changed.'); else toast(data.error);
+    });
+    document.querySelectorAll('[data-user-toggle]').forEach((b) => b.onclick = async () => {
+      await call('PUT', '/api/users/' + b.dataset.userToggle, {active: b.dataset.active !== '1'}); location.reload();
+    });
+    document.querySelectorAll('[data-user-del]').forEach((b) => b.onclick = async () => {
+      if (!confirm('Remove ' + b.dataset.name + '? They are signed out at once. Their past activity stays in the list.')) return;
+      await call('DELETE', '/api/users/' + b.dataset.userDel); location.reload();
+    });
     on('family-off', async () => {
       if (!confirm('Turn off family access? They will no longer be able to sign in.')) return;
       await call('DELETE', '/api/family-access'); toastNext('Family access turned off.'); location.reload();

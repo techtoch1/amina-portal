@@ -59,6 +59,24 @@ CREATE TABLE IF NOT EXISTS stock_moves (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_moves_med ON stock_moves(medicine_id, day);
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  hash TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  last_login TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS activity (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  actor TEXT NOT NULL,           -- Owner | Family | an admin's name
+  role TEXT NOT NULL,            -- owner | admin | family
+  action TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  ip TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS ix_activity_actor ON activity(actor, id);
 """
 
 
@@ -131,6 +149,46 @@ class DB:
     def active(self):
         with self.conn() as c:
             return [dict(r) for r in c.execute("SELECT * FROM reminders WHERE status='active' ORDER BY id")]
+
+    # ---- admin accounts and the activity trail ----
+    def list_users(self):
+        with self.conn() as c:
+            return [dict(r) for r in c.execute("SELECT * FROM users ORDER BY name")]
+
+    def get_user(self, uid):
+        with self.conn() as c:
+            row = c.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        return dict(row) if row else None
+
+    def add_user(self, name, pw_hash):
+        with self.conn() as c:
+            return c.execute("INSERT INTO users(name,hash,created_at) VALUES(?,?,?)", (name, pw_hash, now_iso())).lastrowid
+
+    def update_user(self, uid, **fields):
+        cols = [k for k in fields if k in ("name", "hash", "active", "last_login")]
+        if cols:
+            with self.conn() as c:
+                c.execute(f"UPDATE users SET {','.join(k + '=?' for k in cols)} WHERE id=?", [fields[k] for k in cols] + [uid])
+
+    def delete_user(self, uid):
+        with self.conn() as c:
+            return c.execute("DELETE FROM users WHERE id=?", (uid,)).rowcount
+
+    def add_activity(self, actor, role, action, detail="", ip=""):
+        with self.conn() as c:
+            c.execute("INSERT INTO activity(ts,actor,role,action,detail,ip) VALUES(?,?,?,?,?,?)",
+                      (now_iso(), actor[:80], role, action[:200], detail[:500], ip[:64]))
+
+    def list_activity(self, actor="", limit=50, offset=0):
+        where, args = ("WHERE actor=?", [actor]) if actor else ("", [])
+        with self.conn() as c:
+            total = c.execute(f"SELECT COUNT(*) FROM activity {where}", args).fetchone()[0]
+            rows = [dict(r) for r in c.execute(f"SELECT * FROM activity {where} ORDER BY id DESC LIMIT ? OFFSET ?", args + [limit, offset])]
+        return rows, total
+
+    def activity_actors(self):
+        with self.conn() as c:
+            return [r[0] for r in c.execute("SELECT DISTINCT actor FROM activity ORDER BY actor")]
 
     def add_reminder(self, d, remote_id, kind=None, cron=None, once=False):
         """Store what was created on Wbiztool. kind/cron override the plan's when a one-off date was

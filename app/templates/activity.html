@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Activity{% endblock %}
+{% block body %}
+<div class="pagehead">
+  <div>
+    <h1>Activity</h1>
+    <p class="muted">Who signed in and what they changed or downloaded. Times are Beirut time; newest first.</p>
+  </div>
+  <div class="toolbar noprint">
+    <a class="btn" href="/activity/export.csv{% if user %}?user={{ user|urlencode }}{% endif %}">Download CSV</a>
+  </div>
+</div>
+
+<section class="card">
+  <form method="get" action="/activity" class="row noprint">
+    <label>Show
+      <select name="user">
+        <option value="">Everyone</option>
+        {% for a in actors %}<option value="{{ a }}" {% if a == user %}selected{% endif %}>{{ a }}</option>{% endfor %}
+      </select>
+    </label>
+    <button class="btn" type="submit">Filter</button>
+    <span class="muted">{{ total }} entr{{ 'y' if total == 1 else 'ies' }}</span>
+  </form>
+  {% if rows %}
+  <table class="report">
+    <thead><tr><th>When</th><th>Who</th><th>What</th><th>Details</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.ts|local }}</td>
+      <td><strong dir="auto">{{ r.actor }}</strong>{% if r.role != 'none' %}<br><span class="muted">{{ r.role }}</span>{% endif %}</td>
+      <td>{{ r.action }}</td>
+      <td dir="auto">{{ r.detail }}{% if r.ip %}<br><span class="muted">{{ r.ip }}</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if pages > 1 %}
+  <p class="row noprint">
+    {% if page > 1 %}<a class="btn small" href="/activity?page={{ page - 1 }}{% if user %}&amp;user={{ user|urlencode }}{% endif %}">← Newer</a>{% endif %}
+    <span class="muted">Page {{ page }} of {{ pages }}</span>
+    {% if page < pages %}<a class="btn small" href="/activity?page={{ page + 1 }}{% if user %}&amp;user={{ user|urlencode }}{% endif %}">Older →</a>{% endif %}
+  </p>
+  {% endif %}
+  {% else %}<p class="muted">Nothing recorded yet.</p>{% endif %}
+</section>
+{% endblock %}

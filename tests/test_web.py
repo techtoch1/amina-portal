@@ -889,3 +889,65 @@ def test_cleanup_marks_tracked_and_forgets_missing(settings, tmp_path):
     res = c.post("/api/sync/apply", json={"hash": plan["hash"]}, headers=h).json()["results"]
     assert all(x["ok"] for x in res) and any("warning" in x for x in res)
     assert DB(settings.db_path).active() == []
+
+
+def test_admin_account_edits_everything_but_settings_and_is_tracked(settings, tmp_path):
+    c = make(settings)
+    h = login(c, settings)
+    imported(c, h, tmp_path)
+    assert c.post("/api/users", json={"name": "Sara", "password": "short"}, headers=h).status_code == 400
+    assert c.post("/api/users", json={"name": "Owner", "password": "sara-pass-123"}, headers=h).status_code == 400
+    assert c.post("/api/users", json={"name": "Sara", "password": settings.dashboard_password}, headers=h).status_code == 400
+    uid = c.post("/api/users", json={"name": "Sara", "password": "sara-pass-123"}, headers=h).json()["id"]
+    assert c.post("/api/users", json={"name": "sara", "password": "other-pass-123"}, headers=h).status_code == 400     # name taken
+    assert c.post("/api/users", json={"name": "Dina", "password": "sara-pass-123"}, headers=h).status_code == 400       # password taken
+    assert c.put("/api/family-access", json={"password": "sara-pass-123"}, headers=h).status_code == 400
+
+    a = TestClient(c.app, base_url="http://testserver")
+    ah = login(a, settings, "sara-pass-123")
+    assert a.get("/medicines").status_code == 200 and "Activity" not in a.get("/medicines").text and "/settings" not in a.get("/medicines").text
+    for page in ("/stock", "/reminders", "/mom"):
+        assert a.get(page).status_code == 200
+    # can edit medicines, stock, reminders and Mom's profile/log
+    delta = med_id(a, "Delta")
+    assert a.put(f"/api/medicines/{delta}", json={"dose": "750 mg"}, headers=ah).status_code == 200
+    assert a.post(f"/api/medicines/{delta}/reminder", json={"on": True, "frequency": "daily", "times": ["08:00"]}, headers=ah).status_code == 200
+    assert a.post(f"/api/stock/{delta}/move", json={"kind": "buy", "qty": 30}, headers=ah).status_code == 200
+    assert a.put("/api/profile", json={"blood_type": "O+"}, headers=ah).status_code == 200
+    assert a.post("/api/status-log", json={"kind": "Blood pressure", "value": "120/80"}, headers=ah).status_code == 200
+    plan = a.post("/api/sync/preview", headers=ah).json()
+    assert a.post("/api/sync/apply", json={"hash": plan["hash"]}, headers=ah).status_code == 200
+    assert a.get("/medicines/export.xlsx").status_code == 200
+    # but not settings, accounts or the activity trail
+    assert a.get("/settings", follow_redirects=False).status_code == 303
+    assert a.get("/activity", follow_redirects=False).status_code == 303
+    for method, url, body in (("PUT", "/api/config", {}), ("PUT", "/api/slots", {}), ("PUT", "/api/family-access", {"password": "x" * 9}),
+                              ("POST", "/api/users", {"name": "Eve", "password": "eve-pass-123"}), ("POST", "/api/test-message", {}),
+                              ("POST", "/api/settings", {}), ("DELETE", f"/api/users/{uid}", None)):
+        assert a.request(method, url, json=body, headers=ah).status_code == 403, url
+
+    # the owner sees exactly what they did, with details
+    page = c.get("/activity").text
+    for text in ("Sara", "Signed in", "Edited a medicine", "dose", "750 mg", "Delta", "Changed stock", "bought 30", "Edited Mom&#39;s profile",
+                 "Added a log entry", "Applied reminder changes", "Downloaded the medicines Excel", "Blocked: Changed Wbiztool settings"):
+        assert text in page, text
+    assert "Dina" not in page
+    only = c.get("/activity?user=Sara").text
+    assert "Sara" in only and "Owner" not in only.split("<tbody>")[1]
+    assert c.get("/activity/export.csv?user=Sara").text.startswith("When,Who")
+
+    # turning an admin off signs them out at once; their history stays
+    assert c.put(f"/api/users/{uid}", json={"active": False}, headers=h).status_code == 200
+    assert a.get("/medicines", follow_redirects=False).status_code == 303
+    assert TestClient(c.app, base_url="http://testserver").post("/login", data={"password": "sara-pass-123"}).status_code == 401
+    assert "Failed sign-in" in c.get("/activity").text
+    c.put(f"/api/users/{uid}", json={"active": True, "password": "new-pass-4567"}, headers=h)
+    b = TestClient(c.app, base_url="http://testserver")
+    login(b, settings, "new-pass-4567")
+    assert c.delete(f"/api/users/{uid}", headers=h).status_code == 200
+    assert b.get("/medicines", follow_redirects=False).status_code == 303
+    assert "Sara" in c.get("/activity").text
+
+    # family still read-only; settings page lists admins for the owner
+    c.post("/api/users", json={"name": "Maya", "password": "maya-pass-123"}, headers=h)
+    assert "Maya" in c.get("/settings").text
