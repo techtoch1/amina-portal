@@ -42,7 +42,7 @@
 
   <section class="chart readonly">
     <h2 class="chart-title">{{ L.title }}</h2>
-    {% for key in ['regular', 'as_needed'] %}
+    {% for key in group_order %}
     {% if groups[key] %}
     <h3 class="sect">{{ L[key] }} <span class="count">{{ groups[key]|length }}</span></h3>
     <table class="chart-table big">

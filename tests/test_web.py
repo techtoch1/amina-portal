@@ -627,7 +627,8 @@ def test_excel_export_for_doctor(settings, tmp_path):
     assert rows["Alpha"][5] == "No reminder set" and rows["Eta"][5] == "No reminder (as needed)"
     assert rows["Delta"][2] == "500 mg" and rows["Delta"][3] == "Tablet" and rows["Delta"][8] == "حبة صباحاً ومساءً"
     section_labels = [row[0].value for row in ws.iter_rows(min_row=6) if isinstance(row[0].value, str)]
-    assert any(v.startswith("REGULAR") for v in section_labels) and any(v.startswith("AS NEEDED") for v in section_labels)
+    assert any(v.startswith("EVERY DAY") for v in section_labels) and any(v.startswith("AS NEEDED") for v in section_labels)
+    assert any(v.startswith("EVERY WEEK") for v in section_labels) and any(v.startswith("EVERY FEW DAYS") for v in section_labels)
     assert ws.data_validations.dataValidation[0].formula1 == '"Yes,No - needs change"'
     evil = next(row[1] for row in ws.iter_rows(min_row=6) if row[1].value and str(row[1].value).startswith("="))
     assert evil.data_type == "s" and evil.value.startswith("=HYPERLINK")  # stored as text, never a formula
@@ -991,3 +992,18 @@ def test_stock_price_estimates(settings, tmp_path, monkeypatch):
     assert c.put("/api/stock/settings", json={"low_days": 10, "order_days": 30, "currency": "LBP"}, headers=h).status_code == 200
     assert "LBP" in c.get("/stock").text
     assert put(pack_price="").status_code == 200 and "Est. cost / month</span>" not in c.get("/stock").text
+
+
+def test_medicines_are_sectioned_by_how_often(settings, tmp_path):
+    c = make(settings)
+    h = login(c, settings)
+    imported(c, h, tmp_path)
+    page = c.get("/medicines").text
+    heads = re.findall(r'<h3 class="sect">(.*?) <span', page)
+    assert heads == ["Every day", "Every week", "Every few days or weeks", "As needed"]
+    section = lambda name: page.split(f'<h3 class="sect">{name} ')[1].split("<h3 ")[0]  # noqa: E731
+    assert "Delta" in section("Every day") and "Alpha" in section("Every day")
+    assert "Epsilon" in section("Every week") and "Gamma" in section("Every few days or weeks")   # Gamma: every 28 days
+    assert "Beta" in section("As needed") and "Delta" not in section("As needed")
+    ar = c.get("/medicines?lang=ar").text
+    assert "كل يوم" in ar and "كل أسبوع" in ar and "عند الحاجة" in ar

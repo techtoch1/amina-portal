@@ -26,7 +26,7 @@ from .arabic import arabic_dose, fill_row, gaps as arabic_gaps, FIELD_LABELS
 from .config import Settings
 from .export import build_doctor_workbook, build_stock_workbook, build_usage_workbook
 from .db import DB, now_iso
-from .excel import classify_frequency, details_from_form, load_from_db, norm, read_sheet, rec_to_form, schedule_to_rec
+from .excel import GROUPS, classify_frequency, usage_group, details_from_form, load_from_db, norm, read_sheet, rec_to_form, schedule_to_rec
 from .schedule import cron_human, next_cron_fire, next_injections, today_agenda
 from .messages import COPY_NOTE
 from . import stock as stk
@@ -54,11 +54,13 @@ FAMILY_KEY = "family.hash"
 LABELS = {
     "en": {"dir": "ltr", "title": "Medicines", "updated": "Updated", "prescriber": "Prescriber", "allergies": "Allergies",
            "cols": ["Reminder", "Medication", "Dose", "When to take", "For", "Notes"], "regular": "Regular",
-           "as_needed": "As needed", "next": "Next", "empty": "No medicines yet. Add one or import your Excel file.",
+           "as_needed": "As needed", "daily": "Every day", "weekly": "Every week", "periodic": "Every few days or weeks",
+           "other": "No reminder (for information)", "next": "Next", "empty": "No medicines yet. Add one or import your Excel file.",
            "off": "Off", "set": "Reminder", "edit": "Edit times"},
     "ar": {"dir": "rtl", "title": "الأدوية", "updated": "آخر تحديث", "prescriber": "الطبيب", "allergies": "الحساسية",
            "cols": ["التذكير", "الدواء", "الجرعة", "متى يؤخذ", "لماذا", "ملاحظات"], "regular": "أدوية منتظمة",
-           "as_needed": "عند الحاجة", "next": "الموعد القادم", "empty": "لا توجد أدوية بعد.",
+           "as_needed": "عند الحاجة", "daily": "كل يوم", "weekly": "كل أسبوع", "periodic": "كل بضعة أيام أو أسابيع",
+           "other": "بدون تذكير (للمعرفة)", "next": "الموعد القادم", "empty": "لا توجد أدوية بعد.",
            "off": "متوقف", "set": "التذكير", "edit": "تعديل"},
 }
 
@@ -329,16 +331,16 @@ def create_app(settings=None, client=None):
         now = local_now(settings)
         parsed = {m.row: m for m in res.medicines}
         nxt = {m.row: at for m, at in next_injections(res.medicines, now)}
-        groups = {"regular": [], "as_needed": []}
+        groups = {k: [] for k in GROUPS}
         for r in sorted(db.list_medicines(), key=lambda x: x["id"]):  # same order as in the Excel file
             if not r["active"]:
                 continue
-            kind, _n, _p = classify_frequency(norm(r["frequency"]))
+            kind, every_n, _p = classify_frequency(norm(r["frequency"]))
             m = parsed.get(r["id"])
             form_txt = (r["form_ar"] or r["form"]) if ar else r["form"]
             purpose_txt = (r["purpose_ar"] or r["purpose"]) if ar else (r["purpose"] or r["purpose_ar"])
             notes_txt = (r["notes_ar"] or r["notes_en"]) if ar else (r["notes_en"] or r["notes_ar"])
-            groups["as_needed" if kind == "as_needed" else "regular"].append({
+            groups[usage_group(kind, every_n)].append({
                 "id": r["id"], "name": r["name"], "form": form_txt, "dose": arabic_dose(r["dose"]) if ar else r["dose"],
                 "fb": {"form": ar and bool(r["form"]) and not r["form_ar"], "purpose": ar and bool(r["purpose"]) and not r["purpose_ar"],
                        "notes": ar and bool(r["notes_en"]) and not r["notes_ar"], "when": ar and not r["instruction"]},
@@ -396,7 +398,7 @@ def create_app(settings=None, client=None):
         lang = lang if lang in LABELS else "en"
         _res, now, groups = table_groups(lang)
         return templates.TemplateResponse(request, "medicines.html", base_ctx(
-            request, "medicines", lang=lang, L=LABELS[lang], groups=groups, updated=now.strftime("%d %b %Y"),
+            request, "medicines", lang=lang, group_order=GROUPS, L=LABELS[lang], groups=groups, updated=now.strftime("%d %b %Y"),
             total=sum(len(v) for v in groups.values())))
 
     @app.get("/family", response_class=HTMLResponse, dependencies=[Depends(auth_any)])
@@ -412,7 +414,7 @@ def create_app(settings=None, client=None):
                           "when": (row.get("instruction") if ar else row.get("when_en")) or row.get("when_en") or ""})
         return templates.TemplateResponse(request, "family.html", {
             "csrf": request.session.get("csrf", ""), "role": request.session.get("role", "owner"), "lang": lang,
-            "L": LABELS[lang], "groups": groups, "today": today, "profile": db.profile(),
+            "L": LABELS[lang], "groups": groups, "group_order": GROUPS, "today": today, "profile": db.profile(),
             "updated": now.strftime("%d %b %Y"), "today_label": now.strftime("%A %d %B"),
             "total": sum(len(v) for v in groups.values()), "active": "family"})
 

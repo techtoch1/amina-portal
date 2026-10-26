@@ -200,6 +200,20 @@ def classify_frequency(text):
     return None, None, [f"frequency '{text}' is unclear"]
 
 
+GROUPS = ["daily", "weekly", "periodic", "as_needed", "other"]  # how the medicine lists are sectioned, in this order
+
+
+def usage_group(kind, every_n=None):
+    """daily | weekly | periodic (every few days or weeks, e.g. an injection every 28 days) | as_needed | other (no reminder)."""
+    if kind == "daily":
+        return "daily"
+    if kind == "weekly" or (kind == "every_n" and every_n == 7):
+        return "weekly"
+    if kind == "every_n":
+        return "periodic"
+    return "as_needed" if kind == "as_needed" else "other"
+
+
 # ---------- sheet reading ----------
 
 _QTY_WORDS = ("quantity", "quanity", "qty", "stock", "الكميه")

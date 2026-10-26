@@ -6,7 +6,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from .excel import classify_frequency, load_from_db, norm
+from .excel import classify_frequency, load_from_db, norm, usage_group
 from .schedule import build_desired, cron_human, next_occurrence
 
 BRAND = "1D7A6C"
@@ -77,19 +77,22 @@ def build_doctor_workbook(db, settings, now):
         ws.column_dimensions[chr(64 + c)].width = width
     ws.row_dimensions[header_row].height = 34
 
-    groups = {"Regular": [], "As needed": []}
+    names = {"daily": "Every day", "weekly": "Every week", "periodic": "Every few days or weeks", "as_needed": "As needed",
+             "other": "No reminder"}
+    groups = {k: [] for k in names}
     for r in sorted(db.list_medicines(), key=lambda x: x["id"]):
         if not r["active"]:
             continue
-        kind, _n, _p = classify_frequency(norm(r["frequency"]))
-        groups["As needed" if kind == "as_needed" else "Regular"].append(r)
+        kind, every_n, _p = classify_frequency(norm(r["frequency"]))
+        groups[usage_group(kind, every_n)].append(r)
 
     row, number = header_row + 1, 0
     validation = DataValidation(type="list", formula1='"Yes,No - needs change"', allow_blank=True)
     ws.add_data_validation(validation)
-    for section, items in groups.items():
+    for key, items in groups.items():
         if not items:
             continue
+        section = names[key]
         _put(ws, row, 1, f"{section.upper()} ({len(items)})", font=Font(bold=True), fill=SECTION)
         for c in range(2, len(cols) + 1):
             ws.cell(row=row, column=c).fill = SECTION

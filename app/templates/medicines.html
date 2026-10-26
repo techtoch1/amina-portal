@@ -38,7 +38,7 @@
   <p class="muted">{{ L.updated }} <bdi>{{ updated }}</bdi>{% if profile.get('doctor') %} · {{ L.prescriber }}: <bdi>{{ profile.doctor }}</bdi>{% endif %}{% if profile.get('doctor_phone') %} · <bdi>{{ profile.doctor_phone }}</bdi>{% endif %}</p>
   {% if profile.get('allergies') %}<p class="allergy"><strong>{{ L.allergies }}:</strong> <bdi>{{ profile.allergies }}</bdi></p>{% endif %}
 
-  {% for key in ['regular', 'as_needed'] %}
+  {% for key in group_order %}
   {% if groups[key] %}
   <h3 class="sect">{{ L[key] }} <span class="count">{{ groups[key]|length }}</span></h3>
   <table class="chart-table">
