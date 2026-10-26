@@ -64,18 +64,17 @@
 </section>
 {% endif %}
 
-{% set regular = rows|selectattr('section', 'equalto', 'regular')|list %}
-{% set as_needed = rows|selectattr('section', 'equalto', 'as_needed')|list %}
-<section class="card">
-  <h2>Regular medicines <span class="muted">({{ regular|length }})</span></h2>
-  {{ stock_table(regular, 'No regular medicines yet.') }}
+{% set titles = {'daily_weekly': 'Every day &amp; every week', 'periodic': 'Every few days or weeks', 'as_needed': 'As needed', 'other': 'No reminder (for information)'} %}
+{% set notes = {'periodic': 'For example an injection every 28 days.', 'as_needed': 'Taken only when required, so they are counted by what you add and mark as used.'} %}
+{% for key, items in sections %}
+{% if items or key in ('daily_weekly', 'as_needed') %}
+<section class="card sec sec-{{ key }}">
+  <h2><span class="sec-dot" aria-hidden="true"></span>{{ titles[key]|safe }} <span class="muted">({{ items|length }})</span></h2>
+  {% if notes.get(key) %}<p class="muted">{{ notes[key] }}</p>{% endif %}
+  {{ stock_table(items, 'No medicines here.') }}
 </section>
-
-<section class="card">
-  <h2>As needed <span class="muted">({{ as_needed|length }})</span></h2>
-  <p class="muted">Taken only when required, so they are counted by what you add and mark as used.</p>
-  {{ stock_table(as_needed, 'No as-needed medicines.') }}
-</section>
+{% endif %}
+{% endfor %}
 
 <section class="card noprint">
   <h2>Low-stock alerts</h2>

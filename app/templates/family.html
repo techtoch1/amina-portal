@@ -44,7 +44,7 @@
     <h2 class="chart-title">{{ L.title }}</h2>
     {% for key in group_order %}
     {% if groups[key] %}
-    <h3 class="sect">{{ L[key] }} <span class="count">{{ groups[key]|length }}</span></h3>
+    <h3 class="sect sec-{{ key }}">{{ L[key] }} <span class="count">{{ groups[key]|length }}</span></h3>
     <table class="chart-table big">
       <thead><tr>{% for c in L.cols[1:] %}<th scope="col">{{ c }}</th>{% endfor %}</tr></thead>
       <tbody>

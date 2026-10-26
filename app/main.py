@@ -50,6 +50,7 @@ TEST_MIN_INTERVAL = 3.0  # seconds between manual test sends
 TEST_HEADER = "🧪 رسالة تجريبية — Test message (not a real reminder)\n\n"
 TEST_HEADER_MOM = "🧪 رسالة تجريبية من تطبيق تذكير الدواء — يرجى تجاهلها\n\n"
 FAMILY_KEY = "family.hash"
+STOCK_SECTIONS = ["daily_weekly", "periodic", "as_needed", "other"]
 
 LABELS = {
     "en": {"dir": "ltr", "title": "Medicines", "updated": "Updated", "prescriber": "Prescriber", "allergies": "Allergies",
@@ -369,11 +370,12 @@ def create_app(settings=None, client=None):
         now = local_now(settings)
         stk.materialize(db, by_id, now.date())
         low, order = stock_limits()
-        kinds = {r["id"]: classify_frequency(norm(r["frequency"]))[0] for r in rows}
+        groups = {r["id"]: usage_group(*classify_frequency(norm(r["frequency"]))[:2]) for r in rows}
         out = stk.overview(db, by_id, rows, now, low, order)
-        for r in out:  # same split as the Medicines page: as-needed medicines on their own, everything else is regular
-            r["section"] = "as_needed" if kinds.get(r["id"]) == "as_needed" else "regular"
-        return sorted(out, key=lambda r: r["section"] != "regular")
+        for r in out:  # same sections as the Medicines page, except that daily and weekly share one
+            g = groups.get(r["id"], "other")
+            r["section"] = "daily_weekly" if g in ("daily", "weekly") else g
+        return sorted(out, key=lambda r: STOCK_SECTIONS.index(r["section"]))
 
     def base_ctx(request, active, **extra):
         res, _stopped = load_from_db(db)
@@ -504,6 +506,7 @@ def create_app(settings=None, client=None):
         counts = {k: sum(1 for r in rows if r["status"] == k) for k in ("out", "low", "ok", "none")}
         return templates.TemplateResponse(request, "stock.html", base_ctx(
             request, "stock", rows=rows, counts=counts, today=local_now(settings).date().isoformat(), low_days=low, order_days=order, num=stk.num, plural=stk.plural,
+            sections=[(k, [r for r in rows if r["section"] == k]) for k in STOCK_SECTIONS],
             to_order=[r for r in rows if r["order_qty"] and r["status"] in ("low", "out")], currency=currency(),
             money=lambda x: stk.money(x, currency()), priced=sum(1 for r in rows if r["unit_price"]),
             month_total=sum(r["cost_month"] or 0 for r in rows), order_total=sum(r["order_cost"] or 0 for r in rows if r["status"] in ("low", "out")),

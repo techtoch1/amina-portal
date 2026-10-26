@@ -202,7 +202,7 @@ def build_stock_workbook(rows, low_days, order_days, now, profile, currency="$")
                  f"Price / unit ({currency})", f"Est. cost / month ({currency})", f"Order cost ({currency})"],
                 [30, 12, 14, 11, 12, 11, 11, 14, 14, 18, 16, 20, 16], first=True)
     for i, r in enumerate(rows, 5):
-        values = [r["name"], "As needed" if r.get("section") == "as_needed" else "Regular", r["form"], r["on_hand"] if r["tracked"] else None, r["unit"] if r["tracked"] else "",
+        values = [r["name"], {"daily_weekly": "Every day / week", "periodic": "Every few days or weeks", "as_needed": "As needed", "other": "No reminder"}.get(r.get("section"), ""), r["form"], r["on_hand"] if r["tracked"] else None, r["unit"] if r["tracked"] else "",
                   round(r["daily"], 2) if r["tracked"] and r["daily"] else None,
                   r["days_left"] if r["tracked"] else None,
                   r["run_out"].strftime("%d %b %Y") if r["run_out"] else "", _STATUS[r["status"]],

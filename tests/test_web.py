@@ -695,12 +695,16 @@ def test_stock_pages_counts_reports_and_alerts(settings, tmp_path, monkeypatch):
     assert row[2] == 96 and row[3] == 30 and row[4] == 16 and row[5] == 2 and row[6] == 0
     sw = load_workbook(_io.BytesIO(c.get("/stock/export.xlsx").content))["Stock"]
     srow = next(r for r in sw.iter_rows(min_row=5, values_only=True) if r[0] == "Delta")
-    assert srow[1] == "Regular" and srow[3] == 100 and srow[5] == 2 and srow[8] == "OK"
+    assert srow[1] == "Every day / week" and srow[3] == 100 and srow[5] == 2 and srow[8] == "OK"
     page = c.get("/stock").text
     reg, asn = page.split("As needed <span")[0], page.split("As needed <span")[1]
     assert "Delta" in reg and "Delta" not in asn.split("Low-stock alerts")[0]
-    assert "Beta" in asn.split("Low-stock alerts")[0] and "Beta" not in reg.split("Regular medicines")[1]  # Beta is 'when in pain'
+    assert "Beta" in asn.split("Low-stock alerts")[0] and "Beta" not in reg.split("Every day &amp; every week")[1]  # Beta is 'when in pain'
     assert next(r for r in sw.iter_rows(min_row=5, values_only=True) if r[0] == "Beta")[1] == "As needed"
+    assert next(r for r in sw.iter_rows(min_row=5, values_only=True) if r[0] == "Gamma")[1] == "Every few days or weeks"
+    low = page.split("Low-stock alerts")[0]
+    assert "Epsilon" in reg.split("Every day &amp; every week")[1] and "sec-daily_weekly" in low and "sec-periodic" in low  # weekly shares the daily section
+    assert low.index("Gamma") > low.index("Epsilon") and low.index("Beta") > low.index("Gamma")                      # blue section, then amber
     # validation
     bad = lambda **kw: c.post(f"/api/stock/{delta}/move", json=kw, headers=h).status_code  # noqa: E731
     assert bad(kind="buy", qty=0) == 400 and bad(kind="buy", qty="x") == 400 and bad(kind="used", qty=-1) == 400
@@ -999,9 +1003,9 @@ def test_medicines_are_sectioned_by_how_often(settings, tmp_path):
     h = login(c, settings)
     imported(c, h, tmp_path)
     page = c.get("/medicines").text
-    heads = re.findall(r'<h3 class="sect">(.*?) <span', page)
+    heads = re.findall(r'<h3 class="sect sec-\w+">(.*?) <span', page)
     assert heads == ["Every day", "Every week", "Every few days or weeks", "As needed"]
-    section = lambda name: page.split(f'<h3 class="sect">{name} ')[1].split("<h3 ")[0]  # noqa: E731
+    section = lambda name: re.split(rf'<h3 class="sect sec-\w+">{name} ', page)[1].split("<h3 ")[0]  # noqa: E731
     assert "Delta" in section("Every day") and "Alpha" in section("Every day")
     assert "Epsilon" in section("Every week") and "Gamma" in section("Every few days or weeks")   # Gamma: every 28 days
     assert "Beta" in section("As needed") and "Delta" not in section("As needed")

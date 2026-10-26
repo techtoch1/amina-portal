@@ -206,6 +206,20 @@ body.login{display:grid;place-items:center;min-height:100vh;padding:20px}
   .stock-table .stock-actions .btn:nth-child(3){min-width:5rem}
   .stock-table th,.stock-table td{padding:10px 8px}
 }
+/* section colours: daily & weekly = teal, every few days/weeks = blue, as needed = amber, no reminder = grey */
+:root{--sec-daily:#1d7a6c;--sec-weekly:#1d7a6c;--sec-periodic:#2f6db5;--sec-as_needed:#c27c0a;--sec-other:#7a8a86;--sec-daily_weekly:#1d7a6c;
+  --sec-daily-bg:#e3f4ef;--sec-periodic-bg:#e4eefa;--sec-as_needed-bg:#fff1d6;--sec-other-bg:#eceff0}
+@media (prefers-color-scheme:dark){:root{--sec-daily:#4cbfab;--sec-weekly:#4cbfab;--sec-periodic:#7fb2ee;--sec-as_needed:#e6a93f;--sec-other:#93a5a0;--sec-daily_weekly:#4cbfab;
+  --sec-daily-bg:#1b3a34;--sec-periodic-bg:#1a2e45;--sec-as_needed-bg:#3a2f14;--sec-other-bg:#243230}}
+.sec{border-inline-start:6px solid var(--c)}
+.sec h2{display:flex;align-items:center;gap:10px}.sec-dot{width:14px;height:14px;border-radius:50%;background:var(--c);flex:none}
+.sec-daily_weekly{--c:var(--sec-daily_weekly)}.sec-periodic{--c:var(--sec-periodic)}.sec-as_needed{--c:var(--sec-as_needed)}.sec-other{--c:var(--sec-other)}
+.sec-daily_weekly .report th{background:var(--sec-daily-bg)}.sec-periodic .report th{background:var(--sec-periodic-bg)}
+.sec-as_needed .report th{background:var(--sec-as_needed-bg)}.sec-other .report th{background:var(--sec-other-bg)}
+.sect.sec-daily,.sect.sec-weekly{background:var(--sec-daily-bg);border-inline-start:6px solid var(--sec-daily)}
+.sect.sec-periodic{background:var(--sec-periodic-bg);border-inline-start:6px solid var(--sec-periodic)}
+.sect.sec-as_needed{background:var(--sec-as_needed-bg);border-inline-start:6px solid var(--sec-as_needed)}
+.sect.sec-other{background:var(--sec-other-bg);border-inline-start:6px solid var(--sec-other)}
 .chip.st-chip-ok{background:var(--ok-bg);color:var(--ok)}
 .chip.st-chip-low{background:var(--warn-bg);color:#8a5a00;border:1px solid var(--warn-line)}
 .chip.st-chip-out{background:var(--bad-bg);color:var(--bad)}
