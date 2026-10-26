@@ -694,7 +694,12 @@ def test_stock_pages_counts_reports_and_alerts(settings, tmp_path, monkeypatch):
     assert row[2] == 96 and row[3] == 30 and row[4] == 16 and row[5] == 2 and row[6] == 0
     sw = load_workbook(_io.BytesIO(c.get("/stock/export.xlsx").content))["Stock"]
     srow = next(r for r in sw.iter_rows(min_row=5, values_only=True) if r[0] == "Delta")
-    assert srow[2] == 100 and srow[4] == 2 and srow[7] == "OK"
+    assert srow[1] == "Regular" and srow[3] == 100 and srow[5] == 2 and srow[8] == "OK"
+    page = c.get("/stock").text
+    reg, asn = page.split("As needed <span")[0], page.split("As needed <span")[1]
+    assert "Delta" in reg and "Delta" not in asn.split("Low-stock alerts")[0]
+    assert "Beta" in asn.split("Low-stock alerts")[0] and "Beta" not in reg.split("Regular medicines")[1]  # Beta is 'when in pain'
+    assert next(r for r in sw.iter_rows(min_row=5, values_only=True) if r[0] == "Beta")[1] == "As needed"
     # validation
     bad = lambda **kw: c.post(f"/api/stock/{delta}/move", json=kw, headers=h).status_code  # noqa: E731
     assert bad(kind="buy", qty=0) == 400 and bad(kind="buy", qty="x") == 400 and bad(kind="used", qty=-1) == 400

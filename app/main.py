@@ -364,7 +364,11 @@ def create_app(settings=None, client=None):
         now = local_now(settings)
         stk.materialize(db, by_id, now.date())
         low, order = stock_limits()
-        return stk.overview(db, by_id, rows, now, low, order)
+        kinds = {r["id"]: classify_frequency(norm(r["frequency"]))[0] for r in rows}
+        out = stk.overview(db, by_id, rows, now, low, order)
+        for r in out:  # same split as the Medicines page: as-needed medicines on their own, everything else is regular
+            r["section"] = "as_needed" if kinds.get(r["id"]) == "as_needed" else "regular"
+        return sorted(out, key=lambda r: r["section"] != "regular")
 
     def base_ctx(request, active, **extra):
         res, _stopped = load_from_db(db)

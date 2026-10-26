@@ -195,10 +195,10 @@ def build_stock_workbook(rows, low_days, order_days, now, profile):
     ws = _sheet(wb, "Stock", f"{name} — Medicine stock",
                 f"As of {now.strftime('%d %b %Y %H:%M')}. Estimated from the schedule plus manual changes; "
                 f"LOW = under {low_days} days left.",
-                ["Medication", "Form", "On hand", "Unit", "Use / day", "Days left", "Runs out", "Status", f"Order for {order_days} days"],
-                [30, 14, 11, 12, 11, 11, 14, 14, 18], first=True)
+                ["Medication", "Type", "Form", "On hand", "Unit", "Use / day", "Days left", "Runs out", "Status", f"Order for {order_days} days"],
+                [30, 12, 14, 11, 12, 11, 11, 14, 14, 18], first=True)
     for i, r in enumerate(rows, 5):
-        values = [r["name"], r["form"], r["on_hand"] if r["tracked"] else None, r["unit"] if r["tracked"] else "",
+        values = [r["name"], "As needed" if r.get("section") == "as_needed" else "Regular", r["form"], r["on_hand"] if r["tracked"] else None, r["unit"] if r["tracked"] else "",
                   round(r["daily"], 2) if r["tracked"] and r["daily"] else None,
                   r["days_left"] if r["tracked"] else None,
                   r["run_out"].strftime("%d %b %Y") if r["run_out"] else "", _STATUS[r["status"]],
