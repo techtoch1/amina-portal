@@ -70,6 +70,30 @@
   <p class="muted">Delivery receipts aren't available from Wbiztool here, so this shows what this app sent and cancelled.</p>
 </section>
 
+<section class="card noprint" id="cleanup">
+  <h2>Clean up on Wbiztool</h2>
+  <p class="muted">Loads the reminders Wbiztool itself holds — including ones this app lost track of (from an old WhatsApp client, or requests that timed out). Reminders marked <em>not in the app</em> can be cancelled here.</p>
+  <div class="row">
+    <label class="grow">WhatsApp client to look at
+      <input id="cleanup-client" value="{{ conf_client }}" maxlength="64" placeholder="{{ conf_client }}" autocomplete="off"></label>
+    <button class="btn" id="cleanup-load">Load list from Wbiztool</button>
+  </div>
+  <p class="muted">To clean up the old client, type its ID (for example 9262) above. The default is the one you use now.</p>
+  <p id="cleanup-result" role="status"></p>
+  <div id="cleanup-box" hidden>
+    <div class="row">
+      <button class="btn small" id="cleanup-select-orphans">Select all not in the app</button>
+      <button class="btn small" id="cleanup-select-none">Clear selection</button>
+    </div>
+    <table class="report" id="cleanup-table">
+      <thead><tr><th scope="col"></th><th scope="col">Name</th><th scope="col">Schedule</th><th scope="col">Phone</th><th scope="col">Status</th><th scope="col">In the app?</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="row"><button class="btn danger" id="cleanup-cancel" disabled>Cancel selected on Wbiztool</button></div>
+  </div>
+  <details id="cleanup-raw-box" hidden><summary>Wbiztool's raw answer (for troubleshooting)</summary><pre class="msg" id="cleanup-raw"></pre></details>
+</section>
+
 <dialog id="review-dialog" data-auto="{{ 1 if auto_review else 0 }}">
   <h2>Review changes</h2>
   <p class="muted">Wbiztool reminders can't be edited, so a change cancels the old one and creates a new one. Nothing is sent to Mom until you approve. Use <strong>Test to me</strong> to see any message on your own phone first, or <strong>Test to Mom</strong> to send it to her (you'll be asked to confirm).</p>

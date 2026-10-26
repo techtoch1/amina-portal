@@ -235,6 +235,50 @@
       toastNext(data.turned_off ? data.turned_off + ' reminder' + (data.turned_off === 1 ? '' : 's') + ' turned off. Approve the cancellations below.' : 'No reminders were switched on.');
       location.href = data.turned_off ? '/reminders?review=1' : '/reminders';
     });
+    // ---- cleanup of what Wbiztool really holds ----
+    const cbody = $('cleanup-table') ? $('cleanup-table').querySelector('tbody') : null;
+    let cleanupClient = '';
+    const updateCancelBtn = () => { $('cleanup-cancel').disabled = !cbody.querySelector('input:checked'); };
+    on('cleanup-load', async (e) => {
+      e.target.disabled = true; say($('cleanup-result'), true, 'Loading from Wbiztool…');
+      cleanupClient = $('cleanup-client').value.trim();
+      const {ok, data} = await call('POST', '/api/wbiz/reminders', {whatsapp_client: cleanupClient});
+      e.target.disabled = false;
+      $('cleanup-box').hidden = true; $('cleanup-raw-box').hidden = true;
+      if (!ok) return say($('cleanup-result'), false, data.error);
+      if (!data.items.length) {
+        say($('cleanup-result'), true, 'Wbiztool returned no reminders for client ' + data.client + '.');
+        if (data.raw) { $('cleanup-raw').textContent = data.raw; $('cleanup-raw-box').hidden = false; }
+        return;
+      }
+      cbody.replaceChildren();
+      data.items.forEach((it) => {
+        const tr = el('tr'), cb = el('input'); cb.type = 'checkbox'; cb.value = it.id; cb.dataset.tracked = it.tracked ? '1' : '0'; cb.onchange = updateCancelBtn;
+        const c0 = el('td'); c0.append(cb); tr.append(c0);
+        [it.name || it.id, it.schedule, it.phone, it.status].forEach((v) => tr.append(el('td', v)));
+        const c5 = el('td'); c5.append(el('span', it.tracked ? 'in the app' : 'not in the app', 'chip' + (it.tracked ? '' : ' soft'))); tr.append(c5);
+        tr.querySelectorAll('td').forEach((td, i) => { td.dataset.label = ['', 'Name', 'Schedule', 'Phone', 'Status', 'In the app?'][i]; });
+        cbody.append(tr);
+      });
+      const orphans = data.items.filter((i) => !i.tracked).length;
+      say($('cleanup-result'), true, data.items.length + ' reminder' + (data.items.length === 1 ? '' : 's') + ' on Wbiztool for client ' + data.client + (orphans ? ', ' + orphans + ' not created by this app.' : '.'));
+      $('cleanup-box').hidden = false; updateCancelBtn();
+    });
+    on('cleanup-select-orphans', () => { cbody.querySelectorAll('input').forEach((c) => { c.checked = c.dataset.tracked === '0'; }); updateCancelBtn(); });
+    on('cleanup-select-none', () => { cbody.querySelectorAll('input').forEach((c) => { c.checked = false; }); updateCancelBtn(); });
+    on('cleanup-cancel', async (e) => {
+      const ids = [...cbody.querySelectorAll('input:checked')].map((c) => c.value);
+      if (!ids.length) return;
+      const tracked = [...cbody.querySelectorAll('input:checked')].filter((c) => c.dataset.tracked === '1').length;
+      if (!confirm('Cancel ' + ids.length + ' reminder' + (ids.length === 1 ? '' : 's') + ' on Wbiztool?' + (tracked ? '\n\n' + tracked + ' of them are reminders this app manages; the app will mark them cancelled.' : '') + '\n\nThis cannot be undone here (you would have to create them again).')) return;
+      e.target.disabled = true; say($('cleanup-result'), true, 'Cancelling…');
+      const {ok, data} = await call('POST', '/api/wbiz/cancel', {ids, whatsapp_client: cleanupClient, confirm: true});
+      if (!ok) { e.target.disabled = false; return say($('cleanup-result'), false, data.error); }
+      const done = data.results.filter((r) => r.ok).length, failed = data.results.filter((r) => !r.ok);
+      say($('cleanup-result'), !failed.length && !data.not_attempted,
+        'Cancelled ' + done + ' of ' + ids.length + '.' + (failed.length ? ' Failed: ' + failed.map((f) => f.id + ' (' + f.error.slice(0, 80) + ')').join('; ') : '') +
+        (data.not_attempted ? ' ' + data.not_attempted + ' not attempted (Wbiztool stopped answering).' : '') + ' Press "Load list" again to see what is left.');
+    });
     on('review-btn', openReview);
     if (rv.dataset.auto === '1' && $('review-btn')) openReview();
     on('review-close', () => { rv.close(); location.href = '/reminders'; });

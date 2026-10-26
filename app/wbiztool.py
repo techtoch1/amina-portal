@@ -122,12 +122,12 @@ class WbizClient:
                 "(set WBIZ_DOCS_VERIFIED=true after checking)"
             )
 
-    def _post(self, path, fields=None, retries=0):
+    def _post(self, path, fields=None, retries=0, whatsapp_client=None):
         self._require_config()
         body = {
             "client_id": int(self.s.client_id),
             "api_key": _s(self.s.api_key),
-            "whatsapp_client": _s(self.s.whatsapp_client),
+            "whatsapp_client": _s(whatsapp_client or self.s.whatsapp_client),  # an override lets the cleanup tool look at another client
         }
         body.update({k: _s(v) for k, v in (fields or {}).items()})
         url = self.s.base_url.rstrip("/") + path
@@ -181,8 +181,9 @@ class WbizClient:
     def client_status(self):
         return self._post(PATHS["client_status"], retries=1)
 
-    def list_reminders(self):
-        return self._post(PATHS["reminder_list"], retries=1)
+    def list_reminders(self, whatsapp_client=None):
+        extra = {"whatsapp_client": whatsapp_client} if whatsapp_client else {}
+        return self._post(PATHS["reminder_list"], retries=1, **extra)
 
     # ---- mutating (blocked until docs verified) ----
     @staticmethod
@@ -200,9 +201,10 @@ class WbizClient:
             name=name or "Medicine reminder", phone=phone, message=message, cron=cron, timezone=tz))
         return _find_id(data)
 
-    def cancel_reminder(self, remote_id):
+    def cancel_reminder(self, remote_id, whatsapp_client=None):
         self._require_verified()
-        self._post(PATHS["reminder_cancel"], {FIELDS["reminder_id"]: remote_id})
+        extra = {"whatsapp_client": whatsapp_client} if whatsapp_client else {}
+        self._post(PATHS["reminder_cancel"], {FIELDS["reminder_id"]: remote_id}, **extra)
 
     def _format_schedule(self, fire_at, fmt, tz):
         when = datetime.strptime(fire_at, "%Y-%m-%d %H:%M")
@@ -247,3 +249,38 @@ class WbizClient:
     def send_message(self, phone, message):
         self._require_verified()
         return self._post(PATHS["send_msg"], self._fields(phone=phone, message=message))
+
+
+# ---- reading Wbiztool's reminder list (the response shape is not documented here, so be forgiving) ----
+_LIST_KEYS = {
+    "id": ("reminder_id", "id", "uuid", "pk"),
+    "name": ("name", "reminder_name", "title"),
+    "schedule": ("cron", "cron_expression", "cron_exp", "schedule", "next_run", "scheduled_time"),
+    "phone": ("phone", "phone_number", "mobile", "recipient", "to"),
+    "status": ("status", "state", "is_active", "active"),
+    "message": ("message_template", "template", "msg", "message"),
+}
+
+
+def _find_dict_list(data, depth=0):
+    if isinstance(data, list) and data and all(isinstance(x, dict) for x in data):
+        return data
+    if isinstance(data, dict) and depth < 4:
+        for value in data.values():
+            found = _find_dict_list(value, depth + 1)
+            if found:
+                return found
+    return []
+
+
+def parse_reminder_list(data):
+    """-> [{'id','name','schedule','phone','status','message'}] with everything as short strings."""
+    out = []
+    for item in _find_dict_list(data):
+        row = {}
+        for field, keys in _LIST_KEYS.items():
+            value = next((item[k] for k in keys if k in item and item[k] not in (None, "")), "")
+            row[field] = str(value)[:300]
+        if row["id"]:
+            out.append(row)
+    return out

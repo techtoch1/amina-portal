@@ -32,7 +32,7 @@ from . import stock as stk
 from .suggest import DEFAULT_SLOTS, SLOT_LABELS, suggestion
 from .messages import build_message
 from .sync import apply_plan, compute_plan, copy_enabled, include_purpose, local_now, plan_to_json, rollover
-from .wbiztool import WbizClient, WbizError
+from .wbiztool import WbizClient, WbizError, parse_reminder_list
 
 HERE = Path(__file__).parent
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -374,6 +374,7 @@ def create_app(settings=None, client=None):
         return templates.TemplateResponse(request, "reminders.html", base_ctx(
             request, "reminders", rows=rows, events=events, show=show, auto_review=bool(review),
             copy=copy_enabled(settings, db), failed_week=db.count_failed_since(since), last_sync=last_sync,
+            conf_client=settings.whatsapp_client,
             mom_count=sum(1 for r in rows if r["recipient"] == "mom"), me_count=sum(1 for r in rows if r["recipient"] == "me")))
 
     # ---- stock pages ----
@@ -674,6 +675,57 @@ def create_app(settings=None, client=None):
         n = db.clear_all_reminders()
         db.log_event("settings", True, f"All reminders turned off ({n}); waiting for Review & apply")
         return {"turned_off": n}
+
+    # ---- cleanup: what Wbiztool really holds (including reminders this app lost track of) ----
+    def _client_override(body):
+        wc = " ".join(str(body.get("whatsapp_client") or "").split())
+        if wc and (len(wc) > 64 or any(ch.isspace() for ch in wc)):
+            raise HTTPException(400, "That WhatsApp client is not valid")
+        return wc or None
+
+    @app.post("/api/wbiz/reminders", dependencies=[Depends(auth), Depends(csrf)])
+    async def wbiz_reminders(request: Request):
+        wc = _client_override(await request.json())
+        try:
+            data = client.list_reminders(wc)
+        except WbizError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=502)
+        known = {r["remote_id"] for r in db.active() if r["remote_id"]} if not wc or wc == settings.whatsapp_client else set()
+        items = parse_reminder_list(data)
+        for it in items:
+            it["tracked"] = it["id"] in known
+        raw = json.dumps(data, ensure_ascii=False)[:3000]
+        return {"items": items, "client": wc or settings.whatsapp_client, "raw": raw if not items else ""}
+
+    @app.post("/api/wbiz/cancel", dependencies=[Depends(auth), Depends(csrf)])
+    async def wbiz_cancel(request: Request):
+        body = await request.json()
+        wc = _client_override(body)
+        ids = [str(i) for i in (body.get("ids") or []) if str(i).strip()][:200]
+        if not ids:
+            raise HTTPException(400, "Choose at least one reminder")
+        if body.get("confirm") is not True:
+            raise HTTPException(400, "Confirm that you want to cancel these reminders on Wbiztool")
+        mine = {r["remote_id"]: r for r in db.active() if r["remote_id"]} if not wc or wc == settings.whatsapp_client else {}
+        results = []
+        for rid in ids:
+            try:
+                client.cancel_reminder(rid, wc)
+            except WbizError as exc:
+                if not exc.network and "not found" in str(exc).lower() and rid in mine:
+                    db.end_reminder(mine[rid]["id"], "cancelled")  # already gone on Wbiztool: forget it here too
+                    results.append({"id": rid, "ok": True, "note": "was already gone on Wbiztool"})
+                    continue
+                results.append({"id": rid, "ok": False, "error": str(exc)})
+                db.log_event("cancel", False, f"cleanup {rid}: {exc}")
+                if exc.network:  # Wbiztool is not answering: stop instead of waiting for every one
+                    break
+                continue
+            if rid in mine:  # keep the app's own records in line with what was just cancelled
+                db.end_reminder(mine[rid]["id"], "cancelled")
+            results.append({"id": rid, "ok": True})
+            db.log_event("cancel", True, f"cleanup: cancelled {rid} on Wbiztool")
+        return {"results": results, "not_attempted": len(ids) - len(results)}
 
     @app.delete("/api/medicines/{mid}", dependencies=[Depends(auth), Depends(csrf)])
     def delete_medicine(mid: int):

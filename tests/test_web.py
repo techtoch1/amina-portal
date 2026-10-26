@@ -7,6 +7,12 @@ from app.main import create_app
 from tests.test_core import FakeClient
 
 
+def local_today():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("Asia/Beirut")).date()
+
+
 def make(settings):
     return TestClient(create_app(settings, FakeClient(settings)), base_url="http://testserver")
 
@@ -449,7 +455,7 @@ def test_status_log_dates_and_upcoming(settings):
     from datetime import date, timedelta
     c = make(settings)
     h = login(c, settings)
-    today = date.today()
+    today = local_today()
     past = (today - timedelta(days=40)).isoformat()
     future = (today + timedelta(days=12)).isoformat()
     post = lambda **kw: c.post("/api/status-log", json=kw, headers=h)  # noqa: E731
@@ -500,7 +506,7 @@ def test_report_shows_fallback_one_off_as_a_single_date(settings, tmp_path):
     h = login(c, settings)
     imported(c, h, tmp_path)
     gamma = med_id(c, "Gamma")  # "Every 28 days"
-    when = date.today() + timedelta(days=10)
+    when = local_today() + timedelta(days=10)
     r = c.post(f"/api/medicines/{gamma}/reminder", json={"on": True, "times": ["10:00"], "every_n": 28,
                                                        "date": when.isoformat()}, headers=h)
     assert r.status_code == 200
@@ -519,7 +525,7 @@ def test_family_can_read_mom_log_but_not_change_it(settings):
     from datetime import date, timedelta
     c = make(settings)
     h = login(c, settings)
-    today, past, future = date.today(), (date.today() - timedelta(days=30)).isoformat(), (date.today() + timedelta(days=14)).isoformat()
+    today, past, future = local_today(), (local_today() - timedelta(days=30)).isoformat(), (local_today() + timedelta(days=14)).isoformat()
     post = lambda **kw: c.post("/api/status-log", json=kw, headers=h)  # noqa: E731
     post(kind="Doctor visit", value="Dr. Kamar", note="Results fine", date=past, time="14:30")
     post(kind="Appointment", value="Oncology", date=future, time="09:15")
@@ -538,7 +544,7 @@ def test_family_can_read_mom_log_but_not_change_it(settings):
     # Arabic version
     ar = f.get("/family/log?lang=ar").text
     assert 'dir="rtl"' in ar and "زيارة الطبيب" in ar and "ضغط الدم" in ar and "المواعيد القادمة" in ar and "السجل" in ar
-    assert (date.today() - timedelta(days=30)).strftime("%d/%m/%Y") in ar  # Arabic pages use dd/mm/yyyy
+    assert (local_today() - timedelta(days=30)).strftime("%d/%m/%Y") in ar  # Arabic pages use dd/mm/yyyy
     # the medicines family page links to it too
     assert 'href="/family/log"' in f.get("/family").text
     # and it still can't change anything or reach the owner page
@@ -805,3 +811,81 @@ def test_turn_off_all_reminders_cancels_through_review(settings, tmp_path):
     f = TestClient(c.app, base_url="http://testserver")
     fh = login(f, settings, "family-pass-123")
     assert f.post("/api/reminders/clear", headers=fh).status_code == 403
+
+
+def test_parse_reminder_list_is_forgiving():
+    from app.wbiztool import parse_reminder_list
+    data = {"status": 1, "data": {"reminders": [
+        {"reminder_id": 11, "name": "mom 08:00", "cron": "0 8 * * *", "phone": "9617", "status": 1},
+        {"id": "x2", "title": "other", "message": "hi"},
+        {"name": "no id"},
+    ]}}
+    rows = parse_reminder_list(data)
+    assert [r["id"] for r in rows] == ["11", "x2"]
+    assert rows[0]["schedule"] == "0 8 * * *" and rows[1]["name"] == "other"
+    assert parse_reminder_list({"status": 1}) == [] and parse_reminder_list(None) == []
+
+
+class CleanupClient(FakeClient):
+    """Pretends to be Wbiztool: remembers which WhatsApp client each reminder lives under."""
+    def __init__(self, s):
+        super().__init__(s)
+        self.store = {"42": {"r1"}, "9262": {"old1", "old2"}}
+        self.cancelled = []
+
+    def list_reminders(self, whatsapp_client=None):
+        wc = whatsapp_client or self.s.whatsapp_client
+        return {"status": 1, "data": [{"reminder_id": i, "name": f"n-{i}"} for i in sorted(self.store.get(wc, []))]}
+
+    def cancel_reminder(self, remote_id, whatsapp_client=None):
+        from app.wbiztool import WbizError, WbizNetworkError
+        wc = whatsapp_client or self.s.whatsapp_client
+        if remote_id == "boom":
+            raise WbizNetworkError("timeout")
+        if remote_id not in self.store.get(wc, set()):
+            raise WbizError("Reminder not found")
+        self.store[wc].discard(remote_id)
+        self.cancelled.append((wc, remote_id))
+
+
+def test_cleanup_lists_and_cancels_on_another_client(settings, tmp_path):
+    fake = CleanupClient(settings)
+    c = TestClient(create_app(settings, fake), base_url="http://testserver")
+    h = login(c, settings)
+    r = c.post("/api/wbiz/reminders", json={"whatsapp_client": "9262"}, headers=h).json()
+    assert [i["id"] for i in r["items"]] == ["old1", "old2"] and not any(i["tracked"] for i in r["items"])
+    assert c.post("/api/wbiz/cancel", json={"whatsapp_client": "9262", "ids": ["old1"]}, headers=h).status_code == 400  # needs confirm
+    assert c.post("/api/wbiz/cancel", json={"whatsapp_client": "9262", "ids": [], "confirm": True}, headers=h).status_code == 400
+    assert c.post("/api/wbiz/cancel", json={"whatsapp_client": "bad value", "ids": ["a"], "confirm": True}, headers=h).status_code == 400
+    res = c.post("/api/wbiz/cancel", json={"whatsapp_client": "9262", "ids": ["old1", "nope", "boom", "old2"], "confirm": True}, headers=h).json()
+    assert [x["ok"] for x in res["results"]] == [True, False, False] and res["not_attempted"] == 1  # stops at the network error
+    assert fake.cancelled == [("9262", "old1")]
+    # owner only, CSRF
+    assert c.post("/api/wbiz/reminders", json={}).status_code == 403
+    c.put("/api/family-access", json={"password": "family-pass-123"}, headers=h)
+    f = TestClient(c.app, base_url="http://testserver")
+    fh = login(f, settings, "family-pass-123")
+    assert f.post("/api/wbiz/reminders", json={}, headers=fh).status_code == 403
+    assert f.post("/api/wbiz/cancel", json={"ids": ["r1"], "confirm": True}, headers=fh).status_code == 403
+
+
+def test_cleanup_marks_tracked_and_forgets_missing(settings, tmp_path):
+    fake = CleanupClient(settings)
+    c = TestClient(create_app(settings, fake), base_url="http://testserver")
+    h = login(c, settings)
+    imported(c, h, tmp_path)
+    delta = med_id(c, "Delta")
+    c.post(f"/api/medicines/{delta}/reminder", json={"on": True, "frequency": "daily", "times": ["08:00"]}, headers=h)
+    plan = c.post("/api/sync/preview", headers=h).json()
+    c.post("/api/sync/apply", json={"hash": plan["hash"]}, headers=h)
+    mine = DB(settings.db_path).active()
+    assert len(mine) == 2
+    fake.store["42"] = {mine[0]["remote_id"]}                       # the second one vanished on Wbiztool
+    items = c.post("/api/wbiz/reminders", json={}, headers=h).json()["items"]
+    assert [i["tracked"] for i in items] == [True]
+    # Review & apply no longer fails on a reminder Wbiztool does not have
+    c.post(f"/api/medicines/{delta}/reminder", json={"on": False}, headers=h)
+    plan = c.post("/api/sync/preview", headers=h).json()
+    res = c.post("/api/sync/apply", json={"hash": plan["hash"]}, headers=h).json()["results"]
+    assert all(x["ok"] for x in res) and any("warning" in x for x in res)
+    assert DB(settings.db_path).active() == []

@@ -154,6 +154,12 @@ def apply_plan(client, settings, db, medicines, approved_hash):
                 results.append({"action": label, "ok": True})
                 db.log_event("cancel", True, label)
             except WbizError as exc:
+                if not exc.network and r["remote_id"] and "not found" in str(exc).lower():
+                    # Wbiztool has no such reminder (deleted there, or made under another WhatsApp client): nothing left to cancel
+                    db.end_reminder(r["id"], "cancelled")
+                    results.append({"action": label, "ok": True, "warning": "Wbiztool no longer has this reminder — removed from the app's list"})
+                    db.log_event("cancel", True, f"{label}: not on Wbiztool any more, forgotten")
+                    continue
                 note = str(exc) + (UNSURE if exc.network else "")
                 results.append({"action": label, "ok": False, "error": note})
                 db.log_event("cancel", False, f"{label}: {exc}")

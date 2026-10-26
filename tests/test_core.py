@@ -56,9 +56,10 @@ class FakeClient(WbizClient):
         super().__init__(s)
         self.calls, self.n = [], 0
 
-    def _post(self, path, fields=None, retries=0):
+    def _post(self, path, fields=None, retries=0, whatsapp_client=None, **extra):
         self.n += 1
         self.calls.append((path, fields))
+        self.last_wc = whatsapp_client or extra.get("whatsapp_client")
         return {"status": 1, "data": {"reminder_id": f"r{self.n}"}}
 
 
