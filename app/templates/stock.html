@@ -2,16 +2,15 @@
 {% block title %}Stock{% endblock %}
 {% macro stock_table(items, empty) %}
   <table class="report stock-table">
-    <thead><tr><th scope="col">Medicine</th><th scope="col">On hand</th><th scope="col">Use / day</th><th scope="col">Days left</th><th scope="col">Runs out</th><th scope="col">Est. cost / month</th><th scope="col">Status</th><th scope="col" class="noprint"></th></tr></thead>
+    <thead><tr><th scope="col">Medicine</th><th scope="col">On hand</th><th scope="col">Use / day</th><th scope="col">Days left</th><th scope="col">Cost / month</th><th scope="col">Status</th><th scope="col" class="noprint"></th></tr></thead>
     <tbody>
       {% for r in items %}
       <tr class="st-{{ r.status }}">
         <td data-label="Medicine"><strong dir="auto">{{ r.name }}</strong>{% if r.form %}<div class="muted" dir="auto">{{ r.form }}</div>{% endif %}</td>
         <td data-label="On hand">{% if r.tracked %}<strong>{{ num(r.on_hand) }}</strong> <span class="muted">{{ plural(r.unit, r.on_hand) }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
         <td data-label="Use / day">{% if r.tracked and r.daily %}{{ num(r.daily|round(2)) }}{% if r.source == 'manual' %} <span class="muted">(manual)</span>{% endif %}{% elif r.tracked %}<span class="muted">as needed</span>{% else %}—{% endif %}</td>
-        <td data-label="Days left">{% if r.tracked and r.days_left is not none %}{{ r.days_left }}{% else %}—{% endif %}</td>
-        <td data-label="Runs out">{% if r.run_out %}{{ r.run_out.strftime('%d %b') }}{% else %}—{% endif %}</td>
-        <td data-label="Est. cost / month">{% if r.cost_month %}{{ money(r.cost_month) }}{% elif r.unit_price %}<span class="muted">—</span>{% else %}<span class="muted">no price</span>{% endif %}</td>
+        <td data-label="Days left">{% if r.tracked and r.days_left is not none %}{{ r.days_left }}{% else %}—{% endif %}{% if r.run_out %}<div class="muted sub">runs out {{ r.run_out.strftime('%d %b') }}</div>{% endif %}</td>
+        <td data-label="Cost / month">{% if r.cost_month %}{{ money(r.cost_month) }}{% elif r.unit_price %}<span class="muted">—</span>{% else %}<span class="muted" title="No price set: open ⚙ to add one">—</span>{% endif %}</td>
         <td data-label="Status"><span class="chip st-chip-{{ r.status }}">{{ {'ok': 'OK', 'low': 'Low', 'out': 'Out', 'none': 'Not counted'}[r.status] }}</span></td>
         <td class="noprint stock-actions">
           <button class="btn small" data-stock="buy" data-id="{{ r.id }}">+ Add</button>
@@ -20,7 +19,7 @@
           <button class="btn small ghost" data-stock-settings="{{ r.id }}" aria-label="Settings and history for {{ r.name }}">⚙</button>
         </td>
       </tr>
-      {% else %}<tr><td colspan="8" class="muted">{{ empty }}</td></tr>{% endfor %}
+      {% else %}<tr><td colspan="7" class="muted">{{ empty }}</td></tr>{% endfor %}
     </tbody>
   </table>
 {% endmacro %}
