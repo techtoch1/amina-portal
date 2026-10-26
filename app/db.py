@@ -83,6 +83,9 @@ class DB:
             rem_cols = {r["name"] for r in c.execute("PRAGMA table_info(reminders)")}
             if "once" not in rem_cols:  # a one-off date sent as a date-specific recurring reminder
                 c.execute("ALTER TABLE reminders ADD COLUMN once INTEGER NOT NULL DEFAULT 0")
+            si_cols = {r["name"] for r in c.execute("PRAGMA table_info(stock_items)")}
+            if si_cols and "unit" not in si_cols:  # what the stock is counted in; '' = the default (tablets)
+                c.execute("ALTER TABLE stock_items ADD COLUMN unit TEXT NOT NULL DEFAULT ''")
             if "remind" not in have:  # reminders are now opt-in per medicine; keep the ones that already had times
                 c.execute("ALTER TABLE medicines ADD COLUMN remind INTEGER NOT NULL DEFAULT 0")
                 c.execute("UPDATE medicines SET remind=1 WHERE times != '' AND active=1")
@@ -243,7 +246,7 @@ class DB:
         return self.stock_item(mid)
 
     def update_stock_item(self, mid, **fields):
-        keys = [k for k in fields if k in ("tracking", "units_per_dose", "daily_use", "through_day", "alert_state")]
+        keys = [k for k in fields if k in ("tracking", "units_per_dose", "daily_use", "through_day", "alert_state", "unit")]
         if not keys:
             return
         with self.conn() as c:

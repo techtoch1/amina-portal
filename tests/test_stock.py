@@ -210,3 +210,26 @@ def test_alert_text_is_bilingual_and_suggests_an_order():
     text = alert_text("Amina", rows, 10, 30, date(2026, 10, 26))
     assert "Out of stock:\n• Magnesium" in text and "6 tablets left (~3 days, runs out 29 Oct)" in text
     assert "Suggested order for 30 days: Valtrex 54, Magnesium 30" in text and "الكمية المقترحة" in text and "نفدت" in text
+
+
+def test_stock_is_counted_in_tablets_by_default():
+    from app.stock import plural, unit_word
+    for form in ("Tablet", "Supplement", "", None, "Capsule", "Nutrition"):
+        assert unit_word(form) == "tablets", form            # never "units" / "supplements"
+    assert unit_word("Injection") == "injections" and unit_word("Nutrition drink") == "drinks"
+    assert unit_word("Tablet", "Capsules ") == "capsules"     # a medicine can be given its own word
+    assert plural("tablets", 1) == "tablet" and plural("tablets", 25) == "tablets" and plural("tablets", 0) == "tablets"
+    assert plural("tablets", 1.5) == "tablets" and plural("ml", 1) == "ml"
+
+
+def test_overview_and_report_use_the_custom_word_and_alerts_read_naturally(tmp_path):
+    db, rows = setup_db(tmp_path)
+    m = med(rows[2]["id"], "EuroD", kind="weekly", times=("09:00",), weekdays=[4])
+    assert rows[2]["form"] == "Supplement"
+    start(db, m.row, 30)
+    assert overview(db, {m.row: m}, rows[2:3], NOW)[0]["unit"] == "tablets"      # a supplement is still counted in tablets
+    db.update_stock_item(m.row, unit="sachets")
+    assert overview(db, {m.row: m}, rows[2:3], NOW)[0]["unit"] == "sachets"
+    assert usage_report(db, {m.row: m}, rows[2:3], date(2026, 10, 16), date(2026, 10, 25), NOW)[0]["unit"] == "sachets"
+    one = [{"name": "Valtrex", "status": "low", "on_hand": 1, "unit": "tablets", "days_left": 0, "run_out": date(2026, 10, 26), "order_qty": 59}]
+    assert "1 tablet left" in alert_text("Amina", one, 10, 30, date(2026, 10, 26))

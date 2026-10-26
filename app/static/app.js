@@ -252,7 +252,7 @@
   if (page === 'stock' && $('stock-root')) {  // the usage report shares this tab but has none of these controls
     const today = $('stock-root').dataset.today;
     const mdlg = $('move-dialog'), mform = $('move-form');
-    let moveId = null, counted = false, unitName = 'units';
+    let moveId = null, counted = false, unitName = 'tablets';
     const KIND_TEXT = {
       buy: ['Quantity added', 'Add what you bought or received.'],
       used: ['Quantity used', 'Use this for doses taken outside the schedule (for example as-needed medicines).'],
@@ -261,7 +261,7 @@
     const syncKind = () => {
       const k = mform.kind.value;
       $('move-qty-label').firstChild.textContent = KIND_TEXT[k][0] + ' ';
-      $('move-hint').textContent = KIND_TEXT[k][1] + (k === 'count' && !counted
+      $('move-hint').textContent = 'Counted in ' + unitName + '. ' + KIND_TEXT[k][1] + (k === 'count' && !counted
         ? ' This is the first count: scheduled use is counted from the day after the date you choose.' : '');
     };
     mform.kind.onchange = syncKind;
@@ -292,9 +292,11 @@
       const {ok, data} = await call('GET', '/api/stock/' + b.dataset.stockSettings);
       if (!ok) return toast(data.error);
       stId = b.dataset.stockSettings;
+      sform.unit.value = data.unit === data.unit_default ? '' : data.unit; sform.unit.placeholder = data.unit_default;
+      $('st-dose-label').textContent = data.unit.charAt(0).toUpperCase() + data.unit.slice(1) + ' per dose';
       $('st-title').textContent = data.name + ' — stock settings'; $('st-error').textContent = '';
       sform.tracking.checked = data.tracking; sform.units_per_dose.value = data.units_per_dose; sform.daily_use.value = data.daily_use == null ? '' : data.daily_use;
-      $('st-hint').textContent = 'Tablets, drinks or injections used each time a dose is due.' +
+      $('st-hint').textContent = 'How many ' + data.unit + ' are taken each time a dose is due (use 0.5 for half a tablet).' +
         (data.suggested_units > 1 ? ' Suggested from "When to take": ' + data.suggested_units + '.' : '') +
         (data.has_schedule ? '' : ' This medicine has no reminder schedule yet.');
       const list = $('st-moves'); list.replaceChildren();
@@ -306,7 +308,7 @@
     sform.onsubmit = async (e) => {
       e.preventDefault();
       const {ok, data} = await call('PUT', '/api/stock/' + stId + '/settings',
-        {tracking: sform.tracking.checked, units_per_dose: sform.units_per_dose.value, daily_use: sform.daily_use.value});
+        {tracking: sform.tracking.checked, units_per_dose: sform.units_per_dose.value, daily_use: sform.daily_use.value, unit: sform.unit.value});
       if (!ok) { $('st-error').textContent = data.error; return; }
       toastNext('Saved.'); location.reload();
     };

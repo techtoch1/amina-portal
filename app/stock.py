@@ -90,9 +90,25 @@ def run_out_day(stock, m, item, now):
     return None
 
 
-def unit_word(form):
-    word = (form or "unit").strip().lower()
-    return word if word.endswith("s") else word + "s"
+def unit_word(form, custom=""):
+    """What the stock is counted in. Tablets by default; only an injection or a drink gets its own word,
+    and a medicine can always be given its own ('Counted in' on the Stock page)."""
+    custom = (custom or "").strip().lower()
+    if custom:
+        return custom
+    text = (form or "").lower()
+    if "inject" in text:
+        return "injections"
+    if "drink" in text:
+        return "drinks"
+    return "tablets"
+
+
+def plural(unit, qty):
+    """'tablets' with a quantity of exactly 1 reads '1 tablet'."""
+    if qty is not None and abs(qty - 1) < 0.0001 and unit.endswith("s") and len(unit) > 3:
+        return unit[:-1]
+    return unit
 
 
 def overview(db, medicines_by_id, rows, now, low_days=10, order_days=30):
@@ -104,7 +120,7 @@ def overview(db, medicines_by_id, rows, now, low_days=10, order_days=30):
         mid = r["id"]
         m = medicines_by_id.get(mid)
         item = items.get(mid)
-        base = {"id": mid, "name": r["name"], "form": r["form"], "unit": unit_word(r["form"]), "tracked": False,
+        base = {"id": mid, "name": r["name"], "form": r["form"], "unit": unit_word(r["form"], (items.get(mid) or {}).get("unit", "")), "tracked": False,
                 "on_hand": None, "daily": None, "days_left": None, "run_out": None, "status": "none", "order_qty": 0,
                 "units_per_dose": 1, "daily_use": None, "source": "none", "tracking": False}
         if item:
@@ -152,7 +168,7 @@ def usage_report(db, medicines_by_id, rows, start, end, now):
         if start <= today <= end and item["through_day"] and item["through_day"] < today.isoformat():
             auto += units_so_far_today(m, item, now)  # today's doses so far are not written yet
         closing = opening + bought - auto - manual + adjust
-        out.append({"id": mid, "name": r["name"], "unit": unit_word(r["form"]), "opening": round(opening, 2),
+        out.append({"id": mid, "name": r["name"], "unit": unit_word(r["form"], item.get("unit", "")), "opening": round(opening, 2),
                     "bought": round(bought, 2), "auto": round(auto, 2), "manual": round(manual, 2),
                     "adjust": round(adjust, 2), "closing": round(closing, 2),
                     "per_day": round((auto + manual) / days, 2) if days else 0})
@@ -184,7 +200,7 @@ def alert_text(name, rows, low_days, order_days, today):
         ar.append(f"على وشك النفاد (أقل من {low_days} يوم):")
         for r in low:
             when = r["run_out"].strftime("%d %b") if r["run_out"] else ""
-            en.append(f"• {r['name']}: {num(r['on_hand'])} {r['unit']} left (~{r['days_left']} days{', runs out ' + when if when else ''})")
+            en.append(f"• {r['name']}: {num(r['on_hand'])} {plural(r['unit'], r['on_hand'])} left (~{r['days_left']} days{', runs out ' + when if when else ''})")
             ar.append(f"• {r['name']}: تبقّى {num(r['on_hand'])} (حوالي {r['days_left']} يوم"
                       + (f"، تنفد {r['run_out'].strftime('%d/%m')}" if r["run_out"] else "") + ")")
     need = [r for r in low + out if r["order_qty"]]

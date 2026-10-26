@@ -28,7 +28,7 @@
 <section class="card">
   <h2>To order <span class="muted">(enough for {{ order_days }} days)</span></h2>
   <ul class="plain">
-    {% for r in to_order %}<li><strong dir="auto">{{ r.name }}</strong> — {{ r.order_qty }} {{ r.unit }} <span class="muted">({{ num(r.on_hand) }} left)</span></li>{% endfor %}
+    {% for r in to_order %}<li><strong dir="auto">{{ r.name }}</strong> — {{ r.order_qty }} {{ plural(r.unit, r.order_qty) }} <span class="muted">({{ num(r.on_hand) }} left)</span></li>{% endfor %}
   </ul>
 </section>
 {% endif %}
@@ -41,7 +41,7 @@
       {% for r in rows %}
       <tr class="st-{{ r.status }}">
         <td data-label="Medicine"><strong dir="auto">{{ r.name }}</strong>{% if r.form %}<div class="muted" dir="auto">{{ r.form }}</div>{% endif %}</td>
-        <td data-label="On hand">{% if r.tracked %}<strong>{{ num(r.on_hand) }}</strong> <span class="muted">{{ r.unit }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td data-label="On hand">{% if r.tracked %}<strong>{{ num(r.on_hand) }}</strong> <span class="muted">{{ plural(r.unit, r.on_hand) }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
         <td data-label="Use / day">{% if r.tracked and r.daily %}{{ num(r.daily|round(2)) }}{% if r.source == 'manual' %} <span class="muted">(manual)</span>{% endif %}{% elif r.tracked %}<span class="muted">as needed</span>{% else %}—{% endif %}</td>
         <td data-label="Days left">{% if r.tracked and r.days_left is not none %}{{ r.days_left }}{% else %}—{% endif %}</td>
         <td data-label="Runs out">{% if r.run_out %}{{ r.run_out.strftime('%d %b') }}{% else %}—{% endif %}</td>
@@ -103,9 +103,12 @@
   <form id="st-form" method="dialog">
     <h2 id="st-title">Stock settings</h2>
     <label class="check"><input type="checkbox" name="tracking" checked> <span>Track this medicine's stock</span></label>
-    <label>Units used per dose <input name="units_per_dose" type="number" step="any" min="0.01" required></label>
+    <label>Counted in
+      <input name="unit" maxlength="20" list="unit-options" placeholder="tablets" autocomplete="off"></label>
+    <datalist id="unit-options"><option value="tablets"><option value="capsules"><option value="drinks"><option value="injections"><option value="sachets"><option value="ampoules"></datalist>
+    <label><span id="st-dose-label">Tablets per dose</span> <input name="units_per_dose" type="number" step="any" min="0.01" required></label>
     <p class="muted" id="st-hint"></p>
-    <label>Daily use when there is no schedule (optional)
+    <label>Daily use when there is no schedule (optional, in the unit above)
       <input name="daily_use" type="number" step="any" min="0" inputmode="decimal"></label>
     <p class="muted">Used only for medicines without reminder times. Scheduled medicines are counted from their times.</p>
     <p id="st-error" class="err" role="alert"></p>

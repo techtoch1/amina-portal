@@ -399,7 +399,7 @@ def create_app(settings=None, client=None):
         low, order = stock_limits()
         counts = {k: sum(1 for r in rows if r["status"] == k) for k in ("out", "low", "ok", "none")}
         return templates.TemplateResponse(request, "stock.html", base_ctx(
-            request, "stock", rows=rows, counts=counts, today=local_now(settings).date().isoformat(), low_days=low, order_days=order, num=stk.num,
+            request, "stock", rows=rows, counts=counts, today=local_now(settings).date().isoformat(), low_days=low, order_days=order, num=stk.num, plural=stk.plural,
             to_order=[r for r in rows if r["order_qty"] and r["status"] in ("low", "out")],
             stock_number=settings.stock_number, alerts_ready=bool(settings.stock_number and settings.wbiz_configured and settings.docs_verified)))
 
@@ -412,7 +412,7 @@ def create_app(settings=None, client=None):
         report = stk.usage_report(db, by_id, rows, a, b, now)
         return templates.TemplateResponse(request, "stock_report.html", base_ctx(
             request, "stock", report=report, start=a.isoformat(), end=b.isoformat(), preset=preset if not (start and end) else "",
-            days=(b - a).days + 1, num=stk.num, total_auto=round(sum(r["auto"] for r in report), 2),
+            days=(b - a).days + 1, num=stk.num, plural=stk.plural, total_auto=round(sum(r["auto"] for r in report), 2),
             total_manual=round(sum(r["manual"] for r in report), 2), total_bought=round(sum(r["bought"] for r in report), 2)))
 
     @app.get("/stock/export.xlsx", dependencies=[Depends(auth)])
@@ -465,7 +465,8 @@ def create_app(settings=None, client=None):
         row = _med_or_404(mid)
         by_id, _rows = stock_parsed()
         item = db.stock_item(mid) or {}
-        return {"name": row["name"], "unit": stk.unit_word(row["form"]), "units_per_dose": item.get("units_per_dose", 1),
+        return {"name": row["name"], "unit": stk.unit_word(row["form"], item.get("unit", "")), "unit_default": stk.unit_word(row["form"]),
+                "units_per_dose": item.get("units_per_dose", 1),
                 "daily_use": item.get("daily_use"), "tracking": bool(item.get("tracking", 1)),
                 "suggested_units": stk.suggest_units(row["when_en"]), "counted": db.has_moves(mid),
                 "has_schedule": stk.has_schedule(by_id.get(mid)),
@@ -483,8 +484,13 @@ def create_app(settings=None, client=None):
         daily = None if daily in (None, "") else _finite(daily, 0, 1000)
         if body.get("daily_use") not in (None, "") and daily is None:
             raise HTTPException(400, "Daily use must be a number (0 or more)")
+        unit = " ".join(str(body.get("unit") or "").split())[:20]
+        if unit and not all(ch.isalpha() or ch in " -" for ch in unit):
+            raise HTTPException(400, "'Counted in' should be a word such as tablets, capsules or drinks")
+        if unit.lower() == stk.unit_word(_med_or_404(mid)["form"]):
+            unit = ""  # same as the default: nothing to remember
         db.ensure_stock_item(mid, "")
-        db.update_stock_item(mid, units_per_dose=upd, daily_use=daily, tracking=1 if body.get("tracking", True) else 0)
+        db.update_stock_item(mid, units_per_dose=upd, daily_use=daily, tracking=1 if body.get("tracking", True) else 0, unit=unit)
         return {"ok": True}
 
     @app.post("/api/stock/{mid}/move", dependencies=[Depends(auth), Depends(csrf)])

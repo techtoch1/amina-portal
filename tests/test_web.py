@@ -749,3 +749,27 @@ def test_import_counts_for_medicines_already_in_the_app(settings, tmp_path):
     wb.save(no_qty)
     assert c.post("/api/stock/import", files={"file": ("n.xlsx", no_qty.read_bytes())}, headers=h).status_code == 400
     assert c.post("/api/stock/import", files={"file": ("x.xlsx", b"junk")}, headers=h).status_code == 400
+
+
+def test_stock_page_says_tablets_and_lets_you_change_the_word(settings, tmp_path, monkeypatch):
+    from datetime import datetime as _dt
+    import app.main as main_mod
+    monkeypatch.setattr(main_mod, "local_now", lambda s: _dt(2026, 10, 26, 7, 0))
+    c = make(settings)
+    h = login(c, settings)
+    imported(c, h, tmp_path)                                         # Alpha 30, Beta 17 (forms: Tablet)
+    eps = med_id(c, "Epsilon")                                        # a Supplement
+    c.post(f"/api/stock/{eps}/move", json={"kind": "count", "qty": 25, "day": "2026-10-15"}, headers=h)
+    page = c.get("/stock").text
+    assert re.search(r"Epsilon</strong>.*?<strong>25</strong> <span class=\"muted\">tablets</span>", page, re.S)
+    assert "units" not in page.split("<table")[1].split("</table>")[0]   # the table never says "units"
+    c.post(f"/api/stock/{eps}/move", json={"kind": "count", "qty": 1}, headers=h)
+    assert re.search(r"Epsilon</strong>.*?<strong>1</strong> <span class=\"muted\">tablet</span>", c.get("/stock").text, re.S)  # singular
+    d = c.get(f"/api/stock/{eps}").json()
+    assert d["unit"] == "tablets" and d["unit_default"] == "tablets"
+    ok = lambda **kw: c.put(f"/api/stock/{eps}/settings", json={"units_per_dose": 1, "tracking": True, **kw}, headers=h)  # noqa: E731
+    assert ok(unit="capsules").status_code == 200 and c.get(f"/api/stock/{eps}").json()["unit"] == "capsules"
+    assert re.search(r"Epsilon</strong>.*?<span class=\"muted\">capsule</span>", c.get("/stock").text, re.S)
+    assert ok(unit="tab3ts").status_code == 400 and ok(unit="<b>").status_code == 400
+    assert ok(unit="Tablets").status_code == 200 and c.get(f"/api/stock/{eps}").json()["unit"] == "tablets"  # back to the default
+    assert ok(units_per_dose=0.5).status_code == 200                                                          # half a tablet is fine
