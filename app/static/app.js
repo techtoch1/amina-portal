@@ -176,7 +176,7 @@
       say($('import-result'), true, 'Importing…');
       const {ok, data} = await call('POST', '/api/medicines-import?replace=' + replace, fd);
       if (!ok) return say($('import-result'), false, data.error);
-      toastNext('Added ' + data.added + ' medicine' + (data.added === 1 ? '' : 's') + (data.skipped ? ', skipped ' + data.skipped + ' duplicate(s)' : '') + '.');
+      toastNext('Added ' + data.added + ' medicine' + (data.added === 1 ? '' : 's') + (data.skipped ? ', skipped ' + data.skipped + ' duplicate(s)' : '') + (data.stock_counts ? '; stock counts set for ' + data.stock_counts : '') + '.');
       location.reload();
     };
   }
@@ -246,6 +246,100 @@
       $('wb-dot').textContent = '✔'; $('wb-dot').className = 'num ok';
       $('wb-status').textContent = 'Connected' + (s.whatsapp_error ? ' (status page unavailable)' : '');
     }).catch(() => { $('wb-status').textContent = 'Could not check'; });
+  }
+
+  // ================= Stock =================
+  if (page === 'stock' && $('stock-root')) {  // the usage report shares this tab but has none of these controls
+    const today = $('stock-root').dataset.today;
+    const mdlg = $('move-dialog'), mform = $('move-form');
+    let moveId = null, counted = false, unitName = 'units';
+    const KIND_TEXT = {
+      buy: ['Quantity added', 'Add what you bought or received.'],
+      used: ['Quantity used', 'Use this for doses taken outside the schedule (for example as-needed medicines).'],
+      count: ['Number on hand', 'Type the number you really have. The app records the difference as a correction.'],
+    };
+    const syncKind = () => {
+      const k = mform.kind.value;
+      $('move-qty-label').firstChild.textContent = KIND_TEXT[k][0] + ' ';
+      $('move-hint').textContent = KIND_TEXT[k][1] + (k === 'count' && !counted
+        ? ' This is the first count: scheduled use is counted from the day after the date you choose.' : '');
+    };
+    mform.kind.onchange = syncKind;
+    document.querySelectorAll('[data-stock]').forEach((b) => b.onclick = async () => {
+      const {ok, data} = await call('GET', '/api/stock/' + b.dataset.id);
+      if (!ok) return toast(data.error);
+      moveId = b.dataset.id; counted = data.counted; unitName = data.unit;
+      mform.reset(); $('move-error').textContent = '';
+      mform.kind.value = counted ? b.dataset.stock : 'count';  // the first thing to do with a new medicine is count it
+      mform.day.value = today; mform.day.max = today;
+      $('move-title').textContent = data.name + ' — ' + (counted ? 'stock' : 'first count');
+      syncKind(); mdlg.showModal();
+    });
+    $('move-cancel').onclick = () => mdlg.close();
+    mform.onsubmit = async (e) => {
+      e.preventDefault();
+      $('move-save').disabled = true;
+      const {ok, data} = await call('POST', '/api/stock/' + moveId + '/move',
+        {kind: mform.kind.value, qty: mform.qty.value, day: mform.day.value, note: mform.note.value});
+      $('move-save').disabled = false;
+      if (!ok) { $('move-error').textContent = data.error; return; }
+      toastNext('Stock updated.'); location.reload();
+    };
+
+    const sdlg = $('st-dialog'), sform = $('st-form');
+    let stId = null;
+    document.querySelectorAll('[data-stock-settings]').forEach((b) => b.onclick = async () => {
+      const {ok, data} = await call('GET', '/api/stock/' + b.dataset.stockSettings);
+      if (!ok) return toast(data.error);
+      stId = b.dataset.stockSettings;
+      $('st-title').textContent = data.name + ' — stock settings'; $('st-error').textContent = '';
+      sform.tracking.checked = data.tracking; sform.units_per_dose.value = data.units_per_dose; sform.daily_use.value = data.daily_use == null ? '' : data.daily_use;
+      $('st-hint').textContent = 'Tablets, drinks or injections used each time a dose is due.' +
+        (data.suggested_units > 1 ? ' Suggested from "When to take": ' + data.suggested_units + '.' : '') +
+        (data.has_schedule ? '' : ' This medicine has no reminder schedule yet.');
+      const list = $('st-moves'); list.replaceChildren();
+      if (!data.moves.length) list.append(el('li', 'No stock recorded yet.', 'muted'));
+      data.moves.forEach((m) => list.append(el('li', m.day + ' · ' + m.kind + ' · ' + (m.qty > 0 ? '+' : '') + (Math.round(m.qty * 100) / 100) + (m.note ? ' · ' + m.note : ''))));
+      sdlg.showModal();
+    });
+    $('st-cancel').onclick = () => sdlg.close();
+    sform.onsubmit = async (e) => {
+      e.preventDefault();
+      const {ok, data} = await call('PUT', '/api/stock/' + stId + '/settings',
+        {tracking: sform.tracking.checked, units_per_dose: sform.units_per_dose.value, daily_use: sform.daily_use.value});
+      if (!ok) { $('st-error').textContent = data.error; return; }
+      toastNext('Saved.'); location.reload();
+    };
+
+    $('stock-xlsx').onchange = async (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      const fd = new FormData(); fd.append('file', f);
+      say($('stock-import-result'), true, 'Importing…');
+      const {ok, data} = await call('POST', '/api/stock/import', fd);
+      if (!ok) return say($('stock-import-result'), false, data.error);
+      toastNext('Counts set for ' + data.applied.length + ' medicine(s)' + (data.skipped.length ? '; ' + data.skipped.length + ' already had a count' : '') +
+        (data.unmatched.length ? '; not found: ' + data.unmatched.join(', ') : '') + '.');
+      location.reload();
+    };
+
+    const af = $('alert-form');
+    const saveAlerts = async () => {
+      const {ok, data} = await call('PUT', '/api/stock/settings', {stock_number: af.stock_number.value, low_days: af.low_days.value, order_days: af.order_days.value});
+      say($('alert-result'), ok, ok ? 'Saved ✔' : data.error); return ok;
+    };
+    af.onsubmit = async (e) => { e.preventDefault(); if (await saveAlerts()) setTimeout(() => location.reload(), 700); };
+    $('alert-test').onclick = async () => {
+      if (!(await saveAlerts())) return;
+      if (!confirm('Send a test alert message to ' + (af.stock_number.value || 'the alert number') + ' now?')) return;
+      const {ok, data} = await call('POST', '/api/stock/test-alert', {confirm: true});
+      say($('alert-result'), ok, ok ? 'Test alert sent ✔' : 'Failed: ' + data.error);
+    };
+    $('alert-check').onclick = async () => {
+      if (!(await saveAlerts())) return;
+      const {ok, data} = await call('POST', '/api/stock/check-alerts', {});
+      if (!ok) return say($('alert-result'), false, data.error);
+      say($('alert-result'), true, data.sent ? 'Alert sent ✔' : (data.pending.length ? 'Not sent yet (' + data.pending.join(', ') + ' are low) — check Wbiztool settings, or an alert went out within the last hour.' : 'Nothing is low right now.'));
+    };
   }
 
   // ================= Mom =================

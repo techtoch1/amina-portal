@@ -40,6 +40,25 @@ CREATE TABLE IF NOT EXISTS status_log (
   ts TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS stock_items (
+  medicine_id INTEGER PRIMARY KEY,
+  tracking INTEGER NOT NULL DEFAULT 1,
+  units_per_dose REAL NOT NULL DEFAULT 1,
+  daily_use REAL,                          -- manual units per day, used when the medicine has no schedule
+  through_day TEXT NOT NULL DEFAULT '',    -- last day whose scheduled use has been written to the moves
+  alert_state TEXT NOT NULL DEFAULT '',    -- '' | low | out  (what the last WhatsApp alert said)
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS stock_moves (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  medicine_id INTEGER NOT NULL,
+  day TEXT NOT NULL,                       -- local date the move applies to
+  kind TEXT NOT NULL,                      -- start | buy | used | adjust | auto
+  qty REAL NOT NULL,                       -- + adds stock, - uses stock
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_moves_med ON stock_moves(medicine_id, day);
 """
 
 
@@ -164,6 +183,8 @@ class DB:
 
     def delete_all_medicines(self):
         with self.conn() as c:
+            c.execute("DELETE FROM stock_moves")
+            c.execute("DELETE FROM stock_items")
             return c.execute("DELETE FROM medicines").rowcount
 
     def clear_status(self):
@@ -176,6 +197,8 @@ class DB:
 
     def delete_medicine(self, mid):
         with self.conn() as c:
+            c.execute("DELETE FROM stock_moves WHERE medicine_id=?", (mid,))
+            c.execute("DELETE FROM stock_items WHERE medicine_id=?", (mid,))
             return c.execute("DELETE FROM medicines WHERE id=?", (mid,)).rowcount > 0
 
     # ---- mom's profile (key/value) and status log ----
@@ -201,3 +224,55 @@ class DB:
     def delete_status(self, sid):
         with self.conn() as c:
             return c.execute("DELETE FROM status_log WHERE id=?", (sid,)).rowcount > 0
+
+    # ---- stock ----
+    def stock_items(self):
+        with self.conn() as c:
+            return {r["medicine_id"]: dict(r) for r in c.execute("SELECT * FROM stock_items")}
+
+    def stock_item(self, mid):
+        with self.conn() as c:
+            row = c.execute("SELECT * FROM stock_items WHERE medicine_id=?", (mid,)).fetchone()
+        return dict(row) if row else None
+
+    def ensure_stock_item(self, mid, through_day):
+        """Create the tracking row; scheduled use is counted from the day AFTER `through_day`."""
+        with self.conn() as c:
+            c.execute("INSERT OR IGNORE INTO stock_items(medicine_id, through_day, created_at) VALUES(?,?,?)",
+                      (mid, through_day, now_iso()))
+        return self.stock_item(mid)
+
+    def update_stock_item(self, mid, **fields):
+        keys = [k for k in fields if k in ("tracking", "units_per_dose", "daily_use", "through_day", "alert_state")]
+        if not keys:
+            return
+        with self.conn() as c:
+            c.execute(f"UPDATE stock_items SET {','.join(k + '=?' for k in keys)} WHERE medicine_id=?",
+                      [fields[k] for k in keys] + [mid])
+
+    def add_move(self, mid, day, kind, qty, note=""):
+        with self.conn() as c:
+            c.execute("INSERT INTO stock_moves(medicine_id,day,kind,qty,note,created_at) VALUES(?,?,?,?,?,?)",
+                      (mid, day, kind, float(qty), note[:200], now_iso()))
+
+    def stock_sum(self, mid, up_to_day=None):
+        with self.conn() as c:
+            if up_to_day:
+                row = c.execute("SELECT COALESCE(SUM(qty),0) FROM stock_moves WHERE medicine_id=? AND day<=?", (mid, up_to_day)).fetchone()
+            else:
+                row = c.execute("SELECT COALESCE(SUM(qty),0) FROM stock_moves WHERE medicine_id=?", (mid,)).fetchone()
+        return row[0]
+
+    def has_moves(self, mid):
+        with self.conn() as c:
+            return c.execute("SELECT 1 FROM stock_moves WHERE medicine_id=? LIMIT 1", (mid,)).fetchone() is not None
+
+    def moves(self, mid, limit=40):
+        with self.conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM stock_moves WHERE medicine_id=? ORDER BY day DESC, id DESC LIMIT ?", (mid, limit))]
+
+    def moves_between(self, start_day, end_day):
+        with self.conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM stock_moves WHERE day>=? AND day<=? ORDER BY day, id", (start_day, end_day))]

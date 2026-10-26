@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Usage report{% endblock %}
+{% block body %}
+<div class="pagehead">
+  <div>
+    <h1>Usage report</h1>
+    <p class="muted">{{ start }} to {{ end }} · {{ days }} day{{ 's' if days != 1 }}. Scheduled use is estimated from the reminder schedule.</p>
+  </div>
+  <div class="toolbar noprint">
+    <a class="btn" href="/stock">← Stock</a>
+    <a class="btn" href="/stock/report.xlsx?start={{ start }}&end={{ end }}" download>Excel</a>
+    <button class="btn" id="print-btn">Print</button>
+  </div>
+</div>
+
+<section class="card noprint">
+  <div class="row">
+    <div class="seg" role="group" aria-label="Period">
+      <a class="{{ 'active' if preset == '7' }}" href="/stock/report?preset=7">7 days</a>
+      <a class="{{ 'active' if preset == '30' }}" href="/stock/report?preset=30">30 days</a>
+      <a class="{{ 'active' if preset == '90' }}" href="/stock/report?preset=90">90 days</a>
+      <a class="{{ 'active' if preset == 'month' }}" href="/stock/report?preset=month">This month</a>
+    </div>
+  </div>
+  <form method="get" action="/stock/report" class="two">
+    <label>From <input type="date" name="start" value="{{ start }}" required></label>
+    <label>To <input type="date" name="end" value="{{ end }}" required></label>
+    <div><button class="btn" type="submit">Show this period</button></div>
+  </form>
+</section>
+
+<section class="stats">
+  <div class="stat"><span class="num">{{ num(total_auto) }}</span><span class="lbl">Scheduled use</span><span class="sub">units, all medicines</span></div>
+  <div class="stat"><span class="num">{{ num(total_manual) }}</span><span class="lbl">Other use</span><span class="sub">logged by hand</span></div>
+  <div class="stat"><span class="num">{{ num(total_bought) }}</span><span class="lbl">Bought / added</span><span class="sub">units</span></div>
+</section>
+
+<section class="card">
+  <table class="report stock-table">
+    <thead><tr><th scope="col">Medicine</th><th scope="col">Opening</th><th scope="col">Bought / added</th><th scope="col">Scheduled use</th><th scope="col">Other use</th><th scope="col">Corrections</th><th scope="col">Closing</th><th scope="col">Avg used / day</th></tr></thead>
+    <tbody>
+      {% for r in report %}
+      <tr>
+        <td data-label="Medicine"><strong dir="auto">{{ r.name }}</strong> <span class="muted">{{ r.unit }}</span></td>
+        <td data-label="Opening">{{ num(r.opening) }}</td>
+        <td data-label="Bought / added">{{ num(r.bought) }}</td>
+        <td data-label="Scheduled use">{{ num(r.auto) }}</td>
+        <td data-label="Other use">{{ num(r.manual) }}</td>
+        <td data-label="Corrections">{{ num(r.adjust) }}</td>
+        <td data-label="Closing"><strong>{{ num(r.closing) }}</strong></td>
+        <td data-label="Avg used / day">{{ num(r.per_day) }}</td>
+      </tr>
+      {% else %}<tr><td colspan="8" class="muted">No medicine has a stock count yet. Add counts on the <a href="/stock">Stock</a> page.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

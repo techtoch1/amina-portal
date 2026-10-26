@@ -85,8 +85,10 @@ def test_import_and_medicines_page(settings, tmp_path):
     p = tmp_path / "m.xlsx"
     sheet(p)
     assert c.post("/api/medicines-import", files={"file": ("m.xlsx", p.read_bytes())}).status_code == 403  # CSRF
-    assert imported(c, h, tmp_path).json() == {"added": 8, "skipped": 0}
-    assert imported(c, h, tmp_path).json() == {"added": 0, "skipped": 8}  # no duplicates
+    first = imported(c, h, tmp_path).json()
+    assert first["added"] == 8 and first["skipped"] == 0 and first["stock_counts"] == 2  # Alpha 30 and Beta 17 in the file
+    again = imported(c, h, tmp_path).json()
+    assert again["added"] == 0 and again["skipped"] == 8 and again["stock_counts"] == 0  # no duplicates, no double counts
     page = c.get("/medicines").text
     assert page.count('role="switch"') == 8 and "Note: Some other" not in page
     assert 'class="switch on' not in page  # reminders are opt-in: nothing is switched on after an import
@@ -96,7 +98,7 @@ def test_import_and_medicines_page(settings, tmp_path):
     assert "Tablet" in page and "Injection" in page
     ar = c.get("/medicines?lang=ar").text
     assert 'dir="rtl"' in ar and "حبة صباحاً ومساءً" in ar and "الأدوية" in ar and "عند الحاجة" in ar and "الغثيان" in ar
-    assert imported(c, h, tmp_path, replace=True).json() == {"added": 8, "skipped": 0}
+    assert imported(c, h, tmp_path, replace=True).json()["added"] == 8
     assert c.get("/medicines").text.count('role="switch"') == 8
 
 
@@ -635,3 +637,115 @@ def test_excel_export_for_doctor(settings, tmp_path):
     login(f, settings, "family-pass-123")
     assert f.get("/medicines/export.xlsx").status_code == 403
     assert make(settings).get("/medicines/export.xlsx", follow_redirects=False).status_code == 303
+
+
+def test_stock_pages_counts_reports_and_alerts(settings, tmp_path, monkeypatch):
+    import io as _io
+    from datetime import datetime as _dt
+    from openpyxl import load_workbook
+    import app.main as main_mod
+
+    NOW = _dt(2026, 10, 26, 7, 0)  # a morning before the 08:00 dose
+    monkeypatch.setattr(main_mod, "local_now", lambda s: NOW)
+
+    class Spy(FakeClient):
+        sent = []
+
+        def _post(self, path, fields=None, retries=0):
+            if path.endswith("/send_msg/"):
+                Spy.sent.append(dict(fields))
+            return {"status": 1}
+
+    c = TestClient(create_app(settings, Spy(settings)), base_url="http://testserver")
+    h = login(c, settings)
+    imported(c, h, tmp_path)                                    # the sheet has counts: Alpha 30, Beta 17 as of 15 Oct
+    delta = med_id(c, "Delta")
+    c.post(f"/api/medicines/{delta}/reminder", json={"on": True, "frequency": "daily", "times": ["08:00", "20:00"]}, headers=h)
+    page = c.get("/stock").text
+    assert "Medicine stock" in page and "Not counted yet" in page and "Alpha" in page and 'href="/stock"' in page
+    # counts imported from the Excel column: Alpha has no schedule times, so nothing is used automatically
+    assert re.search(r"<strong dir=\"auto\">Alpha</strong>.*?<strong>30</strong>", page, re.S)
+    # first count for Delta: 100 on 15 Oct; 10 finished days x 2 doses have been used by 26 Oct
+    r = c.post(f"/api/stock/{delta}/move", json={"kind": "count", "qty": 100, "day": "2026-10-15"}, headers=h)
+    assert r.status_code == 200
+    detail = c.get(f"/api/stock/{delta}").json()
+    assert detail["counted"] and detail["has_schedule"] and detail["unit"] == "tablets" and detail["moves"][0]["kind"] == "Starting count"
+    page = c.get("/stock").text
+    assert re.search(r"Delta</strong>.*?<strong>80</strong>", page, re.S)             # 100 - 20
+    assert "04 Dec" in page and ">39<" in page                                        # 2 a day: 39 more days
+    c.post(f"/api/stock/{delta}/move", json={"kind": "buy", "qty": 30, "day": "2026-10-20", "note": "pharmacy"}, headers=h)
+    c.post(f"/api/stock/{delta}/move", json={"kind": "used", "qty": 2, "day": "2026-10-21"}, headers=h)
+    assert re.search(r"Delta</strong>.*?<strong>108</strong>", c.get("/stock").text, re.S)  # 80 + 30 - 2
+    c.post(f"/api/stock/{delta}/move", json={"kind": "count", "qty": 100}, headers=h)       # stock take: 100 really on hand
+    assert re.search(r"Delta</strong>.*?<strong>100</strong>", c.get("/stock").text, re.S)
+    assert [m["kind"] for m in c.get(f"/api/stock/{delta}").json()["moves"]][0] == "Correction"
+    # usage report over 18..25 Oct: 96 before the 18th, +30 bought, -16 scheduled, -1... then the recount
+    rep = c.get("/stock/report?start=2026-10-18&end=2026-10-25").text
+    assert "Usage report" in rep and "Delta" in rep and ">16<" in rep and ">30<" in rep
+    wb = load_workbook(_io.BytesIO(c.get("/stock/report.xlsx?start=2026-10-18&end=2026-10-25").content))
+    row = next(r for r in wb["Usage"].iter_rows(min_row=5, values_only=True) if r[0] == "Delta")
+    assert row[2] == 96 and row[3] == 30 and row[4] == 16 and row[5] == 2 and row[6] == 0
+    sw = load_workbook(_io.BytesIO(c.get("/stock/export.xlsx").content))["Stock"]
+    srow = next(r for r in sw.iter_rows(min_row=5, values_only=True) if r[0] == "Delta")
+    assert srow[2] == 100 and srow[4] == 2 and srow[7] == "OK"
+    # validation
+    bad = lambda **kw: c.post(f"/api/stock/{delta}/move", json=kw, headers=h).status_code  # noqa: E731
+    assert bad(kind="buy", qty=0) == 400 and bad(kind="buy", qty="x") == 400 and bad(kind="used", qty=-1) == 400
+    assert bad(kind="buy", qty=5, day="2026-10-30") == 400 and bad(kind="buy", qty=5, day="nope") == 400
+    assert bad(kind="steal", qty=5) == 400 and bad(kind="buy", qty=1e99) == 400
+    assert c.get("/stock/report?start=2026-10-30&end=2026-10-01").status_code == 400
+    # per-medicine settings: units per dose
+    assert c.put(f"/api/stock/{delta}/settings", json={"units_per_dose": 0, "tracking": True}, headers=h).status_code == 400
+    assert c.put(f"/api/stock/{delta}/settings", json={"units_per_dose": 2, "tracking": True}, headers=h).status_code == 200
+    assert re.search(r"Delta</strong>.*?<strong>100</strong>.*?>4<", c.get("/stock").text, re.S)  # now 4 used a day
+    c.put(f"/api/stock/{delta}/settings", json={"units_per_dose": 1, "tracking": True}, headers=h)
+    # --- alerts: nothing is sent until there is a number; then once per episode
+    assert c.post("/api/stock/check-alerts", json={}, headers=h).status_code == 400
+    assert c.put("/api/stock/settings", json={"stock_number": "123", "low_days": 10, "order_days": 30}, headers=h).status_code == 400
+    ok = c.put("/api/stock/settings", json={"stock_number": "+961 70 111 222", "low_days": 10, "order_days": 30}, headers=h)
+    assert ok.json()["stock_number"] == "96170111222" and settings.stock_number == "96170111222"
+    c.post(f"/api/stock/{delta}/move", json={"kind": "count", "qty": 12}, headers=h)          # 12 left = 5 days: low
+    assert 'aria-label="1 medicines low"' in c.get("/stock").text and "Running low" in c.get("/stock").text
+    Spy.sent.clear()
+    r = c.post("/api/stock/check-alerts", json={}, headers=h).json()
+    assert r["sent"] is True and Spy.sent[0]["phone"] == "96170111222" and settings.mom_number not in str(Spy.sent[0])
+    assert "Delta" in Spy.sent[0]["message_template"] and "Running low" in Spy.sent[0]["message_template"]
+    assert c.post("/api/stock/check-alerts", json={}, headers=h).json()["sent"] is False  # already announced
+    assert c.post("/api/stock/test-alert", json={}, headers=h).status_code == 400            # needs confirmation
+    assert c.post("/api/stock/test-alert", json={"confirm": True}, headers=h).json() == {"ok": True}
+    assert "TEST" in Spy.sent[-1]["message_template"]
+    # permissions
+    c.put("/api/family-access", json={"password": "family-pass-123"}, headers=h)
+    f = TestClient(c.app, base_url="http://testserver")
+    fh = login(f, settings, "family-pass-123")
+    for path in ("/stock", "/stock/report", "/stock/export.xlsx", "/stock/report.xlsx"):
+        r = f.get(path, follow_redirects=False)
+        assert r.status_code in (303, 403), path
+    assert f.get("/api/stock/%d" % delta).status_code == 403
+    assert f.post(f"/api/stock/{delta}/move", json={"kind": "buy", "qty": 1}, headers=fh).status_code == 403
+    assert make(settings).get("/stock", follow_redirects=False).status_code == 303
+    assert c.post(f"/api/stock/{delta}/move", json={"kind": "buy", "qty": 1}).status_code == 403  # CSRF
+    # deleting a medicine removes its stock
+    c.delete(f"/api/medicines/{delta}", headers=h)
+    assert "Delta" not in c.get("/stock").text
+
+
+def test_import_counts_for_medicines_already_in_the_app(settings, tmp_path):
+    c = make(settings)
+    h = login(c, settings)
+    c.post("/api/medicines", json={"name": "Alpha", "section": "regular"}, headers=h)  # added by hand: no stock yet
+    c.post("/api/medicines", json={"name": "Beta", "section": "regular"}, headers=h)
+    p = tmp_path / "m.xlsx"
+    sheet(p)
+    r = c.post("/api/stock/import", files={"file": ("m.xlsx", p.read_bytes())}, headers=h).json()
+    assert sorted(r["applied"]) == ["Alpha", "Beta"] and r["unmatched"] == [] and r["skipped"] == []  # rows without a quantity are ignored
+    again = c.post("/api/stock/import", files={"file": ("m.xlsx", p.read_bytes())}, headers=h).json()
+    assert again["applied"] == [] and sorted(again["skipped"]) == ["Alpha", "Beta"]  # never overwrites a count
+    no_qty = tmp_path / "n.xlsx"
+    from openpyxl import Workbook
+    wb = Workbook()
+    wb.active.append(["Medication", "Dose"])
+    wb.active.append(["Alpha", "1 mg"])
+    wb.save(no_qty)
+    assert c.post("/api/stock/import", files={"file": ("n.xlsx", no_qty.read_bytes())}, headers=h).status_code == 400
+    assert c.post("/api/stock/import", files={"file": ("x.xlsx", b"junk")}, headers=h).status_code == 400

@@ -4,6 +4,7 @@ import json
 import hmac
 import io
 import logging
+import math
 import re
 import secrets
 import threading
@@ -22,11 +23,12 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .arabic import arabic_dose, fill_row, gaps as arabic_gaps, FIELD_LABELS
 from .config import Settings
-from .export import build_doctor_workbook
+from .export import build_doctor_workbook, build_stock_workbook, build_usage_workbook
 from .db import DB
 from .excel import classify_frequency, details_from_form, load_from_db, norm, read_sheet, rec_to_form, schedule_to_rec
 from .schedule import cron_human, next_cron_fire, next_injections, today_agenda
 from .messages import COPY_NOTE
+from . import stock as stk
 from .suggest import DEFAULT_SLOTS, SLOT_LABELS, suggestion
 from .messages import build_message
 from .sync import apply_plan, compute_plan, copy_enabled, include_purpose, local_now, plan_to_json, rollover
@@ -253,12 +255,31 @@ def create_app(settings=None, client=None):
             })
         return res, now, groups
 
+    # ---- stock ----
+    def stock_parsed():
+        """Parsed medicines (valid schedules only) by id, plus the active medicine rows in entry order."""
+        res, _stopped = load_from_db(db)
+        rows = [r for r in sorted(db.list_medicines(), key=lambda x: x["id"]) if r["active"]]
+        return {m.row: m for m in res.medicines}, rows
+
+    def stock_limits():
+        return int(db.get_setting("stock.low_days", "10")), int(db.get_setting("stock.order_days", "30"))
+
+    def stock_overview():
+        by_id, rows = stock_parsed()
+        now = local_now(settings)
+        stk.materialize(db, by_id, now.date())
+        low, order = stock_limits()
+        return stk.overview(db, by_id, rows, now, low, order)
+
     def base_ctx(request, active, **extra):
         res, _stopped = load_from_db(db)
         plan = compute_plan(settings, db, [m for m in res.medicines if m.remind], local_now(settings))
         arabic_missing = sum(len(arabic_gaps(r)) for r in db.list_medicines() if r["active"])
+        stock_rows = stock_overview()
+        stock_attention = sum(1 for r in stock_rows if r["status"] in ("low", "out"))
         ctx = {"csrf": request.session.get("csrf", ""), "active": active, "role": request.session.get("role", "owner"),
-               "arabic_missing": arabic_missing, "mom_tail": settings.mom_number[-3:],
+               "arabic_missing": arabic_missing, "mom_tail": settings.mom_number[-3:], "stock_attention": stock_attention,
                "profile": db.profile(), "pending": len(plan["create"]) + len(plan["cancel"]),
                "configured": settings.wbiz_configured, "verified": settings.docs_verified, "slots": slots(),
                "slot_labels": SLOT_LABELS, "day_names": DAY_NAMES}
@@ -355,6 +376,63 @@ def create_app(settings=None, client=None):
             copy=copy_enabled(settings, db), failed_week=db.count_failed_since(since), last_sync=last_sync,
             mom_count=sum(1 for r in rows if r["recipient"] == "mom"), me_count=sum(1 for r in rows if r["recipient"] == "me")))
 
+    # ---- stock pages ----
+    def _range(preset, start_s, end_s, today):
+        """(start, end) from ?preset=7|30|90|month or ?from=&to=; defaults to the last 30 days."""
+        try:
+            if start_s and end_s:
+                start, end = date.fromisoformat(start_s), date.fromisoformat(end_s)
+            elif preset == "month":
+                start, end = today.replace(day=1), today
+            else:
+                n = int(preset) if str(preset).isdigit() and 1 <= int(preset) <= 730 else 30
+                start, end = today - timedelta(days=n - 1), today
+        except ValueError:
+            raise HTTPException(400, "That date range is not valid")
+        if end < start or (end - start).days > 730:
+            raise HTTPException(400, "Choose a range of up to 2 years, with the start before the end")
+        return start, end
+
+    @app.get("/stock", response_class=HTMLResponse, dependencies=[Depends(auth)])
+    def stock_page(request: Request):
+        rows = stock_overview()
+        low, order = stock_limits()
+        counts = {k: sum(1 for r in rows if r["status"] == k) for k in ("out", "low", "ok", "none")}
+        return templates.TemplateResponse(request, "stock.html", base_ctx(
+            request, "stock", rows=rows, counts=counts, today=local_now(settings).date().isoformat(), low_days=low, order_days=order, num=stk.num,
+            to_order=[r for r in rows if r["order_qty"] and r["status"] in ("low", "out")],
+            stock_number=settings.stock_number, alerts_ready=bool(settings.stock_number and settings.wbiz_configured and settings.docs_verified)))
+
+    @app.get("/stock/report", response_class=HTMLResponse, dependencies=[Depends(auth)])
+    def stock_report_page(request: Request, preset: str = "30", start: str = "", end: str = ""):
+        now = local_now(settings)
+        a, b = _range(preset, start, end, now.date())
+        by_id, rows = stock_parsed()
+        stk.materialize(db, by_id, now.date())
+        report = stk.usage_report(db, by_id, rows, a, b, now)
+        return templates.TemplateResponse(request, "stock_report.html", base_ctx(
+            request, "stock", report=report, start=a.isoformat(), end=b.isoformat(), preset=preset if not (start and end) else "",
+            days=(b - a).days + 1, num=stk.num, total_auto=round(sum(r["auto"] for r in report), 2),
+            total_manual=round(sum(r["manual"] for r in report), 2), total_bought=round(sum(r["bought"] for r in report), 2)))
+
+    @app.get("/stock/export.xlsx", dependencies=[Depends(auth)])
+    def stock_export():
+        now = local_now(settings)
+        low, order = stock_limits()
+        data = build_stock_workbook(stock_overview(), low, order, now, db.profile())
+        return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f'attachment; filename="Medicine_stock_{now.strftime("%Y-%m-%d")}.xlsx"'})
+
+    @app.get("/stock/report.xlsx", dependencies=[Depends(auth)])
+    def stock_report_export(preset: str = "30", start: str = "", end: str = ""):
+        now = local_now(settings)
+        a, b = _range(preset, start, end, now.date())
+        by_id, rows = stock_parsed()
+        stk.materialize(db, by_id, now.date())
+        data = build_usage_workbook(stk.usage_report(db, by_id, rows, a, b, now), a, b, db.profile())
+        return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f'attachment; filename="Medicine_usage_{a.isoformat()}_to_{b.isoformat()}.xlsx"'})
+
     @app.get("/medicines/export.xlsx", dependencies=[Depends(auth)])
     def medicines_xlsx():
         """The medicines exactly as they are in the dashboard, laid out for a doctor to confirm."""
@@ -373,6 +451,137 @@ def create_app(settings=None, client=None):
                         r["next"].strftime("%Y-%m-%d %H:%M") if r["next"] else "", _csv_cell(r["message"])])
         return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": 'attachment; filename="reminders.csv"'})
+
+    # ---- stock API ----
+    def _finite(value, low=0.0, high=100000.0):
+        try:
+            x = float(value)
+        except (TypeError, ValueError):
+            return None
+        return x if math.isfinite(x) and low <= x <= high else None
+
+    @app.get("/api/stock/{mid}", dependencies=[Depends(auth)])
+    def stock_detail(mid: int):
+        row = _med_or_404(mid)
+        by_id, _rows = stock_parsed()
+        item = db.stock_item(mid) or {}
+        return {"name": row["name"], "unit": stk.unit_word(row["form"]), "units_per_dose": item.get("units_per_dose", 1),
+                "daily_use": item.get("daily_use"), "tracking": bool(item.get("tracking", 1)),
+                "suggested_units": stk.suggest_units(row["when_en"]), "counted": db.has_moves(mid),
+                "has_schedule": stk.has_schedule(by_id.get(mid)),
+                "moves": [{"day": x["day"], "kind": stk.KINDS.get(x["kind"], x["kind"]), "qty": x["qty"], "note": x["note"]}
+                          for x in db.moves(mid, 25)]}
+
+    @app.put("/api/stock/{mid}/settings", dependencies=[Depends(auth), Depends(csrf)])
+    async def stock_item_settings(mid: int, request: Request):
+        _med_or_404(mid)
+        body = await request.json()
+        upd = _finite(body.get("units_per_dose"), 0.01, 1000)
+        if upd is None:
+            raise HTTPException(400, "Units per dose must be a number above 0")
+        daily = body.get("daily_use")
+        daily = None if daily in (None, "") else _finite(daily, 0, 1000)
+        if body.get("daily_use") not in (None, "") and daily is None:
+            raise HTTPException(400, "Daily use must be a number (0 or more)")
+        db.ensure_stock_item(mid, "")
+        db.update_stock_item(mid, units_per_dose=upd, daily_use=daily, tracking=1 if body.get("tracking", True) else 0)
+        return {"ok": True}
+
+    @app.post("/api/stock/{mid}/move", dependencies=[Depends(auth), Depends(csrf)])
+    async def stock_move(mid: int, request: Request):
+        """kind: buy (add stock), used (taken outside the schedule), count (set the number actually on hand)."""
+        row = _med_or_404(mid)
+        body = await request.json()
+        kind = body.get("kind")
+        if kind not in ("buy", "used", "count"):
+            raise HTTPException(400, "Unknown kind")
+        qty = _finite(body.get("qty"))
+        if qty is None or (qty <= 0 and kind != "count"):
+            raise HTTPException(400, "Enter a number" + (" above 0" if kind != "count" else " (0 or more)"))
+        now = local_now(settings)
+        try:
+            day = date.fromisoformat(str(body.get("day") or now.date().isoformat()))
+        except ValueError:
+            raise HTTPException(400, "That date is not valid")
+        if day > now.date() or (now.date() - day).days > 800:
+            raise HTTPException(400, "Choose today or an earlier date")
+        note = str(body.get("note") or "").strip()[:200]
+        by_id, _rows = stock_parsed()
+        stk.materialize(db, by_id, now.date())
+        item = db.stock_item(mid)
+        counted = bool(item) and db.has_moves(mid)
+        if kind == "count":
+            if not counted:  # the very first count: scheduled use is counted from the day after it
+                item = db.ensure_stock_item(mid, day.isoformat())
+                db.update_stock_item(mid, through_day=day.isoformat())
+                db.add_move(mid, day.isoformat(), "start", qty, note or "Starting count")
+            else:
+                current = stk.on_hand(db, mid, by_id.get(mid), item, now)
+                db.add_move(mid, now.date().isoformat(), "adjust", qty - current, note or f"Counted {stk.num(qty)}")
+        else:
+            if not item:
+                item = db.ensure_stock_item(mid, day.isoformat())
+            if not counted and not item["through_day"]:
+                db.update_stock_item(mid, through_day=day.isoformat())
+            db.add_move(mid, day.isoformat(), kind, qty if kind == "buy" else -qty, note)
+        db.log_event("stock", True, f"{row['name']}: {kind} {stk.num(qty)}")
+        return {"ok": True}
+
+    @app.post("/api/stock/import", dependencies=[Depends(auth), Depends(csrf)])
+    def stock_import(file: UploadFile = File(...)):
+        raw = file.file.read(MAX_UPLOAD + 1)
+        if len(raw) > MAX_UPLOAD:
+            raise HTTPException(413, "File is too large (2 MB max)")
+        rows, errors = read_sheet(BytesIO(raw))
+        if errors:
+            raise HTTPException(400, "; ".join(errors))
+        if not any(r.get("_quantity") for _n, r in rows):
+            raise HTTPException(400, "No quantity column found (a header like 'Quantity' or 'الكمية')")
+        names = {m["name"].strip().lower(): m["id"] for m in db.list_medicines()}
+        res = stk.apply_counts(db, names, [(r["name"], r.get("_quantity", ""), r.get("_count_date", "")) for _n, r in rows])
+        db.log_event("stock", True, f"Counts imported: {len(res['applied'])} set")
+        return res
+
+    @app.put("/api/stock/settings", dependencies=[Depends(auth), Depends(csrf)])
+    async def stock_settings(request: Request):
+        body = await request.json()
+        low, order = _finite(body.get("low_days"), 1, 365), _finite(body.get("order_days"), 1, 365)
+        if low is None or order is None:
+            raise HTTPException(400, "Days must be numbers between 1 and 365")
+        number = "".join(ch for ch in str(body.get("stock_number") or "") if ch.isdigit())
+        if number and not 8 <= len(number) <= 15:
+            raise HTTPException(400, "The alert number should be 8-15 digits including the country code")
+        db.set_setting("stock.low_days", str(int(low)))
+        db.set_setting("stock.order_days", str(int(order)))
+        db.set_setting("conf.stock_number", number)
+        settings.apply_overrides(db)
+        return {"ok": True, "stock_number": number}
+
+    @app.post("/api/stock/check-alerts", dependencies=[Depends(auth), Depends(csrf)])
+    def stock_check_alerts():
+        if not settings.stock_number:
+            raise HTTPException(400, "Enter the stock alert number first")
+        by_id, rows = stock_parsed()
+        now = local_now(settings)
+        stk.materialize(db, by_id, now.date())
+        sent, new = stk.check_alerts(client, settings, db, by_id, rows, now)
+        return {"sent": sent, "pending": [r["name"] for r in new]}
+
+    @app.post("/api/stock/test-alert", dependencies=[Depends(auth), Depends(csrf)])
+    async def stock_test_alert(request: Request):
+        if (await request.json()).get("confirm") is not True:
+            raise HTTPException(400, "Confirm that you want to send a message to the alert number")
+        if not settings.stock_number:
+            raise HTTPException(400, "Enter the stock alert number first")
+        sample = [{"name": "Example medicine", "status": "low", "on_hand": 6, "unit": "tablets", "days_left": 3,
+                   "run_out": local_now(settings).date() + timedelta(days=3), "order_qty": 54}]
+        text = "🧪 TEST — this is only a test of the stock alert\n\n" + stk.alert_text(db.profile().get("name") or "Medicines", sample, 10, 30, local_now(settings).date())
+        try:
+            client.send_message(settings.stock_number, text)
+        except WbizError as exc:
+            raise HTTPException(502, str(exc))
+        db.log_event("stock", True, "Test stock alert sent")
+        return {"ok": True}
 
     # ---- medicines API ----
     def _med_or_404(mid):
@@ -475,10 +684,12 @@ def create_app(settings=None, client=None):
             if key in have:
                 skipped += 1
                 continue
-            db.add_medicine({k: v[:500] for k, v in rec.items()})
+            db.add_medicine({k: v[:500] for k, v in rec.items() if not k.startswith("_")})
             have.add(key)
             added += 1
-        return {"added": added, "skipped": skipped}
+        counts = [(r["name"], r["_quantity"], r.get("_count_date", "")) for _n, r in rows if r.get("_quantity")]
+        stocked = len(stk.apply_counts(db, {m["name"].strip().lower(): m["id"] for m in db.list_medicines()}, counts)["applied"]) if counts else 0
+        return {"added": added, "skipped": skipped, "stock_counts": stocked}
 
     # ---- sync with Wbiztool ----
     @app.post("/api/sync/preview", dependencies=[Depends(auth), Depends(csrf)])
@@ -783,12 +994,20 @@ def create_app(settings=None, client=None):
 
     # ---- background roll-over of one-off messages (e.g. every 28 days) ----
     def loop():
+        _time.sleep(120)
         while True:
-            _time.sleep(1800)
             try:
                 rollover(client, settings, db, planning_meds())
             except Exception as exc:  # keep the thread alive
                 logging.getLogger("rollover").error("rollover failed: %s", settings.redact(type(exc).__name__))
+            try:
+                by_id, rows = stock_parsed()
+                now = local_now(settings)
+                stk.materialize(db, by_id, now.date())
+                stk.check_alerts(client, settings, db, by_id, rows, now)
+            except Exception as exc:
+                logging.getLogger("stock").error("stock check failed: %s", settings.redact(type(exc).__name__))
+            _time.sleep(1800)
 
     @asynccontextmanager
     async def lifespan(_app):

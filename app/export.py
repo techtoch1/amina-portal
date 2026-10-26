@@ -163,3 +163,76 @@ def build_doctor_workbook(db, settings, now):
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()
+
+
+# ---------------- stock reports ----------------
+def _sheet(wb, title, heading, subtitle, columns, widths, first=False):
+    ws = wb.active if first else wb.create_sheet()
+    ws.title = title
+    _put(ws, 1, 1, heading, font=Font(bold=True, size=15))
+    _put(ws, 2, 1, subtitle, font=Font(italic=True, color="586F69"))
+    for c, (name, width) in enumerate(zip(columns, widths), 1):
+        _put(ws, 4, c, name, font=Font(bold=True, color="FFFFFF"), fill=HEAD, border=BOX,
+             alignment=Alignment(wrap_text=True, vertical="center"))
+        ws.column_dimensions[chr(64 + c)].width = width
+    ws.freeze_panes = "A5"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    return ws
+
+
+_STATUS = {"ok": "OK", "low": "LOW", "out": "OUT", "none": "Not counted"}
+_FILL = {"low": PatternFill("solid", fgColor="FFF4DF"), "out": PatternFill("solid", fgColor="FDECEA")}
+
+
+def build_stock_workbook(rows, low_days, order_days, now, profile):
+    from .stock import num
+
+    wb = Workbook()
+    name = profile.get("name") or "Patient"
+    ws = _sheet(wb, "Stock", f"{name} — Medicine stock",
+                f"As of {now.strftime('%d %b %Y %H:%M')}. Estimated from the schedule plus manual changes; "
+                f"LOW = under {low_days} days left.",
+                ["Medication", "Form", "On hand", "Unit", "Use / day", "Days left", "Runs out", "Status", f"Order for {order_days} days"],
+                [30, 14, 11, 12, 11, 11, 14, 14, 18], first=True)
+    for i, r in enumerate(rows, 5):
+        values = [r["name"], r["form"], r["on_hand"] if r["tracked"] else None, r["unit"] if r["tracked"] else "",
+                  round(r["daily"], 2) if r["tracked"] and r["daily"] else None,
+                  r["days_left"] if r["tracked"] else None,
+                  r["run_out"].strftime("%d %b %Y") if r["run_out"] else "", _STATUS[r["status"]],
+                  r["order_qty"] or None]
+        for c, v in enumerate(values, 1):
+            cell = _put(ws, i, c, v, border=BOX, alignment=WRAP)
+            if r["status"] in _FILL:
+                cell.fill = _FILL[r["status"]]
+    n = 5 + len(rows) + 1
+    todo = [r for r in rows if r["order_qty"] and r["status"] in ("low", "out")]
+    _put(ws, n, 1, "To order" + (": " + ", ".join(f"{r['name']} × {r['order_qty']}" for r in todo) if todo else ": nothing right now"),
+         font=Font(bold=True))
+    return _bytes(wb)
+
+
+def build_usage_workbook(rows, start, end, profile):
+    wb = Workbook()
+    name = profile.get("name") or "Patient"
+    days = (end - start).days + 1
+    ws = _sheet(wb, "Usage", f"{name} — Medicine usage",
+                f"{start.strftime('%d %b %Y')} to {end.strftime('%d %b %Y')} ({days} days). Scheduled use is an estimate from the reminder schedule.",
+                ["Medication", "Unit", "Opening", "Bought / added", "Scheduled use", "Other use", "Corrections", "Closing", "Avg used / day"],
+                [30, 12, 11, 15, 15, 12, 13, 11, 15], first=True)
+    for i, r in enumerate(rows, 5):
+        for c, v in enumerate([r["name"], r["unit"], r["opening"], r["bought"], r["auto"], r["manual"], r["adjust"], r["closing"], r["per_day"]], 1):
+            _put(ws, i, c, v, border=BOX, alignment=WRAP)
+    n = 5 + len(rows)
+    _put(ws, n, 1, "Total used", font=Font(bold=True))
+    _put(ws, n, 5, round(sum(r["auto"] for r in rows), 2), font=Font(bold=True))
+    _put(ws, n, 6, round(sum(r["manual"] for r in rows), 2), font=Font(bold=True))
+    return _bytes(wb)
+
+
+def _bytes(wb):
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()

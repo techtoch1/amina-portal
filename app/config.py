@@ -45,6 +45,7 @@ class Settings:
     port: int = 8000
     docs_verified: bool = False
     base_url: str = "https://wbiztool.com/api/v1"
+    stock_number: str = field(default="", repr=False)  # WhatsApp number that receives low-stock alerts
     schedule_format: str = ""  # the date format Wbiztool accepted for one-off messages (learned)
 
     @property
@@ -109,6 +110,7 @@ class Settings:
             if v is not None:
                 setattr(self, attr, v)
         self.schedule_format = g("wbiz.schedule_format") or ""
+        self.stock_number = g("conf.stock_number") or ""
         v = g("conf.docs_verified")
         if v is not None:
             self.docs_verified = v == "1"

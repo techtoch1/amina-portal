@@ -191,3 +191,14 @@ body.login{display:grid;place-items:center;min-height:100vh;padding:20px}
 .test-btn.mom{border-color:var(--brand);color:var(--brand-d)}
 
 .pre{white-space:pre-line}
+
+/* stock */
+.stock-actions{white-space:nowrap}.stock-actions .btn{margin-inline-end:4px}
+.chip.st-chip-ok{background:var(--ok-bg);color:var(--ok)}
+.chip.st-chip-low{background:var(--warn-bg);color:#8a5a00;border:1px solid var(--warn-line)}
+.chip.st-chip-out{background:var(--bad-bg);color:var(--bad)}
+.chip.st-chip-none{background:var(--soft);color:var(--muted)}
+.stock-table tr.st-out td:first-child{box-shadow:inset 4px 0 0 var(--bad)}
+.stock-table tr.st-low td:first-child{box-shadow:inset 4px 0 0 var(--warn-line)}
+@media (max-width:760px){.stock-actions{display:flex!important;flex-wrap:wrap;gap:6px}.stock-actions .btn{width:auto}
+  .report.stock-table td.stock-actions::before{display:none}}

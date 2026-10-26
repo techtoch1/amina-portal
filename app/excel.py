@@ -202,6 +202,9 @@ def classify_frequency(text):
 
 # ---------- sheet reading ----------
 
+_QTY_WORDS = ("quantity", "quanity", "qty", "stock", "الكميه")
+
+
 def _column_map(header_cells):
     alias = {norm(a): canon for canon, names in HEADERS.items() for a in names}
     cols = {}
@@ -209,7 +212,34 @@ def _column_map(header_cells):
         canon = alias.get(norm(cell))
         if canon and canon not in cols:
             cols[canon] = idx
+        elif "quantity" not in cols and any(w in norm(cell) for w in _QTY_WORDS):
+            cols["quantity"] = idx  # e.g. "الكمية  quanity 15/10/2026": the count and the date it was taken
     return cols
+
+
+def parse_quantity(value):
+    """'30' -> (30.0, ''), '30+' -> (30.0, '30+'), '' / '—' -> (None, '')."""
+    text = norm(value)
+    import re as _re
+    m = _re.match(r"^(\d+(?:[.,]\d+)?)\s*(\+?)", text)
+    if not m:
+        return None, ""
+    return float(m.group(1).replace(",", ".")), (m.group(1) + "+" if m.group(2) else "")
+
+
+def header_count_date(header_text):
+    """The date written in the quantity header (DD/MM/YYYY), as ISO, or ''."""
+    d, _ = parse_date(norm(header_text).split()[-1]) if norm(header_text) else (None, None)
+    if d:
+        return d.isoformat()
+    import re as _re
+    m = _re.search(r"(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})", norm(header_text))
+    if m:
+        try:
+            return date(int(m.group(3)), int(m.group(2)), int(m.group(1))).isoformat()
+        except ValueError:
+            return ""
+    return ""
 
 
 def _text(v):
@@ -332,6 +362,7 @@ def read_sheet(source):
     if head is None:
         return [], ["Couldn't find the header row. It needs a 'Medication' (or Name) column plus at least one more, e.g. Dose or When to take"]
     out, section = [], None
+    count_date = header_count_date(cell_text(rows[head][cols["quantity"]])) if "quantity" in cols and cols["quantity"] < len(rows[head]) else ""
     for offset, cells in enumerate(rows[head + 1:], start=head + 2):
         rec = {f: cell_text(cells[cols[f]] if f in cols and cols[f] < len(cells) else None) for f in FIELDS}
         if not any(rec.values()):
@@ -355,6 +386,8 @@ def read_sheet(source):
             rec["frequency"] = infer_frequency(rec["when_en"]) if rec["when_en"] else ""
             if not rec["frequency"] and section == "as_needed":
                 rec["frequency"] = "as needed"
+        if "quantity" in cols and cols["quantity"] < len(cells):  # stock count, kept outside FIELDS (own tables)
+            rec["_quantity"], rec["_count_date"] = cell_text(cells[cols["quantity"]]), count_date
         out.append((offset, rec))
     return out, []
 
