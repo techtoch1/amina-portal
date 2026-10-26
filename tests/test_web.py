@@ -2,6 +2,7 @@ import re
 
 from fastapi.testclient import TestClient
 
+from app.db import DB
 from app.main import create_app
 from tests.test_core import FakeClient
 
@@ -773,3 +774,34 @@ def test_stock_page_says_tablets_and_lets_you_change_the_word(settings, tmp_path
     assert ok(unit="tab3ts").status_code == 400 and ok(unit="<b>").status_code == 400
     assert ok(unit="Tablets").status_code == 200 and c.get(f"/api/stock/{eps}").json()["unit"] == "tablets"  # back to the default
     assert ok(units_per_dose=0.5).status_code == 200                                                          # half a tablet is fine
+
+
+def test_turn_off_all_reminders_cancels_through_review(settings, tmp_path):
+    c = make(settings)
+    h = login(c, settings)
+    imported(c, h, tmp_path)
+    delta, eps = med_id(c, "Delta"), med_id(c, "Epsilon")
+    c.post(f"/api/medicines/{delta}/reminder", json={"on": True, "frequency": "daily", "times": ["08:00", "20:00"]}, headers=h)
+    c.post(f"/api/medicines/{eps}/reminder", json={"on": True, "times": ["09:00"], "weekdays": [4]}, headers=h)
+    plan = c.post("/api/sync/preview", headers=h).json()
+    c.post("/api/sync/apply", json={"hash": plan["hash"]}, headers=h)
+    assert len(DB(settings.db_path).active()) == 6                  # 3 schedules x (Mom + copy to me)
+    # one click turns every switch off; nothing is cancelled on Wbiztool yet
+    r = c.post("/api/reminders/clear", headers=h)
+    assert r.json() == {"turned_off": 2}
+    assert 'class="switch on' not in c.get("/medicines").text
+    assert len(DB(settings.db_path).active()) == 6                  # still scheduled until approved
+    plan = c.post("/api/sync/preview", headers=h).json()
+    assert plan["create"] == [] and len(plan["cancel"]) == 6        # the whole list to cancel, to be approved
+    res = c.post("/api/sync/apply", json={"hash": plan["hash"]}, headers=h).json()["results"]
+    assert len(res) == 6 and all(x["ok"] for x in res)
+    assert DB(settings.db_path).active() == [] and "Nothing is scheduled yet" in c.get("/reminders").text
+    # the times are kept, so a reminder can be switched back on in one click
+    assert c.get(f"/api/medicines/{delta}").json()["times"] == ["08:00", "20:00"]
+    assert c.post("/api/reminders/clear", headers=h).json() == {"turned_off": 0}   # idempotent
+    # owner only, CSRF
+    assert c.post("/api/reminders/clear").status_code == 403
+    c.put("/api/family-access", json={"password": "family-pass-123"}, headers=h)
+    f = TestClient(c.app, base_url="http://testserver")
+    fh = login(f, settings, "family-pass-123")
+    assert f.post("/api/reminders/clear", headers=fh).status_code == 403

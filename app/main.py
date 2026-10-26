@@ -667,6 +667,14 @@ def create_app(settings=None, client=None):
         db.log_event("settings", True, f"Arabic fill: {len(filled)} filled, {len(missing)} still missing")
         return {"filled": filled, "missing": missing}
 
+    @app.post("/api/reminders/clear", dependencies=[Depends(auth), Depends(csrf)])
+    def clear_reminders():
+        """Turn every reminder off. Wbiztool is not touched: the cancellations are previewed and approved
+        in Review & apply like any other change."""
+        n = db.clear_all_reminders()
+        db.log_event("settings", True, f"All reminders turned off ({n}); waiting for Review & apply")
+        return {"turned_off": n}
+
     @app.delete("/api/medicines/{mid}", dependencies=[Depends(auth), Depends(csrf)])
     def delete_medicine(mid: int):
         _med_or_404(mid)

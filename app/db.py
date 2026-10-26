@@ -184,6 +184,11 @@ class DB:
         with self.conn() as c:
             return c.execute("UPDATE medicines SET remind=? WHERE id=?", (int(on), mid)).rowcount > 0
 
+    def clear_all_reminders(self):
+        """Switch every reminder off (the times stay, so they can be switched back on). Returns how many were on."""
+        with self.conn() as c:
+            return c.execute("UPDATE medicines SET remind=0 WHERE remind=1").rowcount
+
     def delete_all_medicines(self):
         with self.conn() as c:
             c.execute("DELETE FROM stock_moves")

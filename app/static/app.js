@@ -228,6 +228,13 @@
       if (!data.cancel.length && !data.create.length) $('apply-result').append(el('li', 'Already in sync — nothing to do.', 'ok'));
     };
     const openReview = () => { rv.showModal(); loadPlan(); };
+    on('clear-reminders', async () => {
+      if (!confirm('Turn off ALL reminders?\n\nEvery reminder switch is switched off. Nothing is cancelled on Wbiztool until you review and approve the list on the next screen. Your times are kept.')) return;
+      const {ok, data} = await call('POST', '/api/reminders/clear', {});
+      if (!ok) return toast(data.error);
+      toastNext(data.turned_off ? data.turned_off + ' reminder' + (data.turned_off === 1 ? '' : 's') + ' turned off. Approve the cancellations below.' : 'No reminders were switched on.');
+      location.href = data.turned_off ? '/reminders?review=1' : '/reminders';
+    });
     on('review-btn', openReview);
     if (rv.dataset.auto === '1' && $('review-btn')) openReview();
     on('review-close', () => { rv.close(); location.href = '/reminders'; });
