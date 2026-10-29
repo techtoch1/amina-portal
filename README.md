@@ -28,7 +28,7 @@ pip install -r requirements.txt
 cp .env.example .env && chmod 600 .env     # then edit .env
 ```
 
-Fill in `.env`: `DASHBOARD_PASSWORD` (10+ characters). The Wbiztool details and phone numbers can be entered
+Fill in `.env`: `DASHBOARD_PASSWORD` (10+ characters; you sign in with the user name `owner` and this password). The Wbiztool details and phone numbers can be entered
 in the app's Settings tab (values saved there override `.env`).
 For plain-http local testing set `COOKIE_SECURE=false`.
 

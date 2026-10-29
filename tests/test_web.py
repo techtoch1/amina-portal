@@ -17,8 +17,9 @@ def make(settings):
     return TestClient(create_app(settings, FakeClient(settings)), base_url="http://testserver")
 
 
-def login(c, settings, password=None):
-    r = c.post("/login", data={"password": password or settings.dashboard_password}, follow_redirects=False)
+def login(c, settings, password=None, username=None):
+    username = username or ("owner" if password is None else "family")
+    r = c.post("/login", data={"username": username, "password": password or settings.dashboard_password}, follow_redirects=False)
     assert r.status_code == 303
     page = c.get("/medicines" if password is None else "/family").text
     return {"X-CSRF-Token": page.split('name="csrf" content="')[1].split('"')[0]}
@@ -62,15 +63,15 @@ def test_auth_required(settings):
     for path in ("/", "/medicines", "/reminders", "/mom", "/settings", "/family", "/family/log", "/reminders/export.csv"):
         assert c.get(path, follow_redirects=False).status_code == 303, path
     assert c.get("/api/status").status_code == 401
-    assert c.post("/login", data={"password": "nope"}).status_code == 401
+    assert c.post("/login", data={"username": "owner", "password": "nope"}).status_code == 401
     assert c.get("/login").status_code == 200
 
 
 def test_lockout(settings):
     c = make(settings)
     for _ in range(5):
-        c.post("/login", data={"password": "x"})
-    assert c.post("/login", data={"password": settings.dashboard_password}).status_code == 429
+        c.post("/login", data={"username": "owner", "password": "x"})
+    assert c.post("/login", data={"username": "owner", "password": settings.dashboard_password}).status_code == 429
 
 
 def test_navigation_and_pages(settings, tmp_path):
@@ -202,7 +203,7 @@ def test_family_read_only_access(settings, tmp_path):
     stored = DB(settings.db_path).get_setting("family.hash")
     assert stored.startswith("scrypt$") and "family-pass-123" not in stored  # hashed, never plain
     f = TestClient(c.app, base_url="http://testserver")
-    assert f.post("/login", data={"password": "wrong-password"}).status_code == 401
+    assert f.post("/login", data={"username": "family", "password": "wrong-password"}).status_code == 401
     fh = login(f, settings, "family-pass-123")
     assert f.get("/", follow_redirects=False).headers["location"] == "/family"
     fam = f.get("/family").text
@@ -222,7 +223,7 @@ def test_family_read_only_access(settings, tmp_path):
     assert login(o, settings) and o.get("/settings").status_code == 200
     # turn it off -> family can no longer sign in
     assert c.delete("/api/family-access", headers=h).json() == {"enabled": False}
-    assert TestClient(c.app, base_url="http://testserver").post("/login", data={"password": "family-pass-123"}).status_code == 401
+    assert TestClient(c.app, base_url="http://testserver").post("/login", data={"username": "family", "password": "family-pass-123"}).status_code == 401
 
 
 def test_edit_details_and_sections(settings, tmp_path):
@@ -555,7 +556,7 @@ def test_family_can_read_mom_log_but_not_change_it(settings):
     # the owner sees the same page, and family access off means no sign-in
     assert c.get("/family/log").status_code == 200
     c.delete("/api/family-access", headers=h)
-    assert TestClient(c.app, base_url="http://testserver").post("/login", data={"password": "family-pass-123"}).status_code == 401
+    assert TestClient(c.app, base_url="http://testserver").post("/login", data={"username": "family", "password": "family-pass-123"}).status_code == 401
 
 
 def test_mom_profile_and_log_import_export(settings):
@@ -907,14 +908,11 @@ def test_admin_account_edits_everything_but_settings_and_is_tracked(settings, tm
     imported(c, h, tmp_path)
     assert c.post("/api/users", json={"name": "Sara", "password": "short"}, headers=h).status_code == 400
     assert c.post("/api/users", json={"name": "Owner", "password": "sara-pass-123"}, headers=h).status_code == 400
-    assert c.post("/api/users", json={"name": "Sara", "password": settings.dashboard_password}, headers=h).status_code == 400
     uid = c.post("/api/users", json={"name": "Sara", "password": "sara-pass-123"}, headers=h).json()["id"]
     assert c.post("/api/users", json={"name": "sara", "password": "other-pass-123"}, headers=h).status_code == 400     # name taken
-    assert c.post("/api/users", json={"name": "Dina", "password": "sara-pass-123"}, headers=h).status_code == 400       # password taken
-    assert c.put("/api/family-access", json={"password": "sara-pass-123"}, headers=h).status_code == 400
 
     a = TestClient(c.app, base_url="http://testserver")
-    ah = login(a, settings, "sara-pass-123")
+    ah = login(a, settings, "sara-pass-123", "Sara")
     assert a.get("/medicines").status_code == 200 and "Activity" not in a.get("/medicines").text and "/settings" not in a.get("/medicines").text
     for page in ("/stock", "/reminders", "/mom"):
         assert a.get(page).status_code == 200
@@ -949,11 +947,11 @@ def test_admin_account_edits_everything_but_settings_and_is_tracked(settings, tm
     # turning an admin off signs them out at once; their history stays
     assert c.put(f"/api/users/{uid}", json={"active": False}, headers=h).status_code == 200
     assert a.get("/medicines", follow_redirects=False).status_code == 303
-    assert TestClient(c.app, base_url="http://testserver").post("/login", data={"password": "sara-pass-123"}).status_code == 401
+    assert TestClient(c.app, base_url="http://testserver").post("/login", data={"username": "Sara", "password": "sara-pass-123"}).status_code == 401
     assert "Failed sign-in" in c.get("/activity").text
     c.put(f"/api/users/{uid}", json={"active": True, "password": "new-pass-4567"}, headers=h)
     b = TestClient(c.app, base_url="http://testserver")
-    login(b, settings, "new-pass-4567")
+    login(b, settings, "new-pass-4567", "sara")
     assert c.delete(f"/api/users/{uid}", headers=h).status_code == 200
     assert b.get("/medicines", follow_redirects=False).status_code == 303
     assert "Sara" in c.get("/activity").text
@@ -1011,3 +1009,23 @@ def test_medicines_are_sectioned_by_how_often(settings, tmp_path):
     assert "Beta" in section("As needed") and "Delta" not in section("As needed")
     ar = c.get("/medicines?lang=ar").text
     assert "كل يوم" in ar and "كل أسبوع" in ar and "عند الحاجة" in ar
+
+
+def test_login_asks_for_user_name_and_password(settings):
+    c = make(settings)
+    page = c.get("/login").text
+    assert 'name="username"' in page and 'name="password"' in page
+    pw = settings.dashboard_password
+    post = lambda **d: TestClient(c.app, base_url="http://testserver").post("/login", data=d, follow_redirects=False).status_code  # noqa: E731
+    assert post(password=pw) == 401                                   # no user name
+    assert post(username="admin", password=pw) == 401                 # wrong user name
+    assert post(username="owner", password="nope") == 401
+    assert post(username="Owner", password=pw) == 303                 # not case-sensitive
+    h = login(c, settings)
+    c.put("/api/family-access", json={"password": "family-pass-123"}, headers=h)
+    c.post("/api/users", json={"name": "Sara", "password": "sara-pass-123"}, headers=h)
+    assert post(username="owner", password="family-pass-123") == 401  # a password only works with its own user name
+    assert post(username="family", password="family-pass-123") == 303
+    assert post(username="Sara", password="sara-pass-123") == 303
+    assert post(username="family", password="sara-pass-123") == 401
+    assert "user name tried: admin" in c.get("/activity").text

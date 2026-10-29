@@ -273,19 +273,25 @@ def create_app(settings=None, client=None):
         return templates.TemplateResponse(request, "login.html", {"error": None})
 
     @app.post("/login", response_class=HTMLResponse)
-    def login(request: Request, password: str = Form("")):
+    def login(request: Request, username: str = Form(""), password: str = Form("")):
         ip = request.client.host if request.client else "?"
         count, first = failures.get(ip, [0, _time.time()])
         if _time.time() - first > 300:
             count, first = 0, _time.time()
         if count >= 5:
             return templates.TemplateResponse(request, "login.html", {"error": "Too many attempts. Wait 5 minutes."}, status_code=429)
-        owner_ok = hmac.compare_digest(password.encode(), settings.dashboard_password.encode())
-        stored = db.get_setting(FAMILY_KEY)
-        family_ok = bool(stored) and _check_password(password, stored) and not owner_ok
+        name = " ".join(username.split())[:80]
+        owner_ok = family_ok = False
         admin = None
-        if not owner_ok and not family_ok and password:
-            admin = next((u for u in db.list_users() if u["active"] and _check_password(password, u["hash"])), None)
+        if name.lower() == "owner":
+            owner_ok = hmac.compare_digest(password.encode(), settings.dashboard_password.encode())
+        elif name.lower() == "family":
+            stored = db.get_setting(FAMILY_KEY)
+            family_ok = bool(stored) and _check_password(password, stored)
+        else:
+            user = next((u for u in db.list_users() if u["name"].lower() == name.lower()), None)
+            if user and user["active"] and _check_password(password, user["hash"]):
+                admin = user
         if owner_ok or family_ok or admin:
             failures.pop(ip, None)
             request.session.clear()
@@ -296,9 +302,9 @@ def create_app(settings=None, client=None):
                 db.update_user(admin["id"], last_login=now_iso())
             db.add_activity(who, request.session["role"], "Signed in", ip=ip)
             return RedirectResponse("/", status_code=303)
-        db.add_activity("(not signed in)", "none", "Failed sign-in", ip=ip)
+        db.add_activity("(not signed in)", "none", "Failed sign-in", f"user name tried: {name[:40]}", ip=ip)
         failures[ip] = [count + 1, first]
-        return templates.TemplateResponse(request, "login.html", {"error": "Wrong password."}, status_code=401)
+        return templates.TemplateResponse(request, "login.html", {"error": "Wrong user name or password."}, status_code=401)
 
     @app.post("/logout")
     def logout(request: Request, _=Depends(csrf)):
@@ -1064,8 +1070,6 @@ def create_app(settings=None, client=None):
             raise HTTPException(400, "The family password must be at least 8 characters")
         if hmac.compare_digest(password.encode(), settings.dashboard_password.encode()):
             raise HTTPException(400, "It must be different from your own password")
-        if any(_check_password(password, u["hash"]) for u in db.list_users()):
-            raise HTTPException(400, "It must be different from every admin's password")
         db.set_setting(FAMILY_KEY, _hash_password(password))
         db.log_event("settings", True, "Family password set")
         return {"enabled": True}
@@ -1078,18 +1082,11 @@ def create_app(settings=None, client=None):
 
     # ---- admin accounts (owner only) and the activity trail ----
     def _password_problem(password, skip_id=None):
-        """Passwords identify who signs in, so each one must be unique."""
+        """Everyone signs in with a user name and a password, so passwords only need to be long enough."""
         if len(password) < 8:
             return "The password must be at least 8 characters"
         if len(password) > 200:
             return "The password is too long"
-        if hmac.compare_digest(password.encode(), settings.dashboard_password.encode()):
-            return "That is the owner password — choose a different one"
-        stored = db.get_setting(FAMILY_KEY)
-        if stored and _check_password(password, stored):
-            return "That is the family password — choose a different one"
-        if any(u["id"] != skip_id and _check_password(password, u["hash"]) for u in db.list_users()):
-            return "Another admin already uses that password — choose a different one"
         return ""
 
     def _user_or_404(uid):

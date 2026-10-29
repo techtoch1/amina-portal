@@ -11,10 +11,12 @@
 <main class="logincard card">
   <div class="logo big" aria-hidden="true"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 20.5 3.5 13.5a4.95 4.95 0 0 1 7-7l7 7a4.95 4.95 0 0 1-7 7Z"/><path d="m8.5 8.5 7 7"/></svg></div>
   <h1>Medicine reminders</h1>
-  <p class="muted">Enter your password to continue.</p>
+  <p class="muted">Sign in with your user name and password.</p>
   <form method="post" action="/login" class="stack">
+    <label for="un">User name</label>
+    <input id="un" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="80" autofocus required>
     <label for="pw">Password</label>
-    <input id="pw" name="password" type="password" autocomplete="current-password" autofocus required>
+    <input id="pw" name="password" type="password" autocomplete="current-password" required>
     {% if error %}<p class="err" role="alert">{{ error }}</p>{% endif %}
     <button class="btn primary block" type="submit">Sign in</button>
   </form>

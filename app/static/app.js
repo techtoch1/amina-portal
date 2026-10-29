@@ -482,13 +482,13 @@
     $('family-form').onsubmit = async (e) => {
       e.preventDefault();
       const {ok, data} = await call('PUT', '/api/family-access', {password: e.target.password.value});
-      if (ok) { toastNext('Family access is on. Share the /family page and the password.'); location.reload(); }
+      if (ok) { toastNext('Family access is on. Family sign in with the user name family and this password.'); location.reload(); }
       else say($('family-result'), false, data.error);
     };
     $('user-form').onsubmit = async (e) => {
       e.preventDefault(); const f = e.target;
       const {ok, data} = await call('POST', '/api/users', {name: f.name.value, password: f.password.value});
-      if (ok) { toastNext('Admin added. They sign in with their password on the normal sign-in page.'); location.reload(); }
+      if (ok) { toastNext('Admin added. They sign in with their name and password on the normal sign-in page.'); location.reload(); }
       else say($('user-result'), false, data.error);
     };
     document.querySelectorAll('[data-user-pw]').forEach((b) => b.onclick = async () => {

@@ -54,7 +54,7 @@
 
 <section class="card">
   <h2>Admins</h2>
-  <p class="muted">An admin can edit medicines, reminders, stock and Mom's profile and log, but cannot open Settings or this list. Each admin signs in with their own password on the normal sign-in page, and everything they do is recorded in <a href="/activity">Activity</a>.</p>
+  <p class="muted">An admin can edit medicines, reminders, stock and Mom's profile and log, but cannot open Settings or this list. Each admin signs in with their own name and password on the normal sign-in page, and everything they do is recorded in <a href="/activity">Activity</a>.</p>
   {% if users %}
   <table class="report">
     <thead><tr><th>Name</th><th>Last sign-in</th><th>Status</th><th></th></tr></thead>
@@ -77,7 +77,7 @@
   {% else %}<p class="muted">No admins yet.</p>{% endif %}
   <form id="user-form" class="stack" autocomplete="off">
     <label>Name <input name="name" maxlength="40" required></label>
-    <label>Password (8+ characters, different from every other password)
+    <label>Password (8+ characters)
       <input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="200" required></label>
     <p id="user-result" role="status"></p>
     <div><button class="btn primary" type="submit">Add admin</button></div>
@@ -86,8 +86,9 @@
 
 <section class="card">
   <h2>Family access</h2>
+  <p class="muted">Family sign in with the user name <code>family</code>. You sign in with <code>owner</code>.</p>
   <p class="muted">Give family a separate password for a <strong>read-only</strong> page: today's medicines, the full table in English and Arabic, her allergies and contacts, and Mom's log (upcoming appointments, readings and history). They can't change anything or see the settings.</p>
-  <p>Status: <strong id="family-state">{{ 'On' if family_enabled else 'Off' }}</strong>{% if family_enabled %} — share <code>/family</code> and the family password{% endif %}</p>
+  <p>Status: <strong id="family-state">{{ 'On' if family_enabled else 'Off' }}</strong>{% if family_enabled %} — share the user name <code>family</code> and the family password{% endif %}</p>
   <form id="family-form" class="stack" autocomplete="off">
     <label>{{ 'New family password' if family_enabled else 'Family password' }} (8+ characters)
       <input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="200"></label>
